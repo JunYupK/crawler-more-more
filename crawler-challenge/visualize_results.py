@@ -101,31 +101,31 @@ def create_cpu_utilization_chart():
     plt.close()
 
 def create_gil_comparison():
-    """GIL vs 멀티프로세싱 비교"""
-    categories = ['네트워크 I/O\n대기', 'HTML 파싱', '정규식 처리', 'MD5 해시', '텍스트 분석']
+    """GIL vs multiprocessing performance comparison"""
+    categories = ['Network I/O\nWaiting', 'HTML Parsing', 'Regex Processing', 'MD5 Hashing', 'Text Analysis']
     
-    single_thread = [100, 35, 25, 20, 15]  # GIL 제약으로 순차 처리
-    multiprocess = [100, 85, 80, 75, 70]   # 병렬 처리로 성능 향상
+    single_thread = [100, 35, 25, 20, 15]  # Sequential processing due to GIL
+    multiprocess = [100, 85, 80, 75, 70]   # Improved performance with parallel processing
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
     x = np.arange(len(categories))
     width = 0.35
     
-    bars1 = ax.bar(x - width/2, single_thread, width, label='단일 프로세스 (GIL)', 
+    bars1 = ax.bar(x - width/2, single_thread, width, label='Single Process (GIL)', 
                    color='lightcoral', alpha=0.8)
-    bars2 = ax.bar(x + width/2, multiprocess, width, label='멀티프로세싱', 
+    bars2 = ax.bar(x + width/2, multiprocess, width, label='Multiprocessing', 
                    color='lightgreen', alpha=0.8)
     
-    ax.set_xlabel('작업 유형')
-    ax.set_ylabel('상대적 성능 (%)')
-    ax.set_title('GIL vs 멀티프로세싱 성능 비교\n(작업 유형별)', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Task Type')
+    ax.set_ylabel('Relative Performance (%)')
+    ax.set_title('GIL vs Multiprocessing Performance Comparison\n(By Task Type)', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(categories)
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # 성능 향상률 표시
+    # Show performance improvement
     for i, (single, multi) in enumerate(zip(single_thread, multiprocess)):
         if single < multi:
             improvement = ((multi - single) / single) * 100
@@ -137,83 +137,83 @@ def create_gil_comparison():
     plt.close()
 
 def create_bottleneck_analysis():
-    """병목점별 성능 영향 분석"""
-    bottlenecks = ['네트워크\n지연', 'DNS\n조회', 'SSL\n핸드셰이크', 'HTML\n파싱', 'GIL\n제약', '메모리\n관리']
-    impact_scores = [85, 60, 45, 30, 25, 15]  # 병목 영향도 점수
+    """Performance impact analysis by bottleneck"""
+    bottlenecks = ['Network\nLatency', 'DNS\nLookup', 'SSL\nHandshake', 'HTML\nParsing', 'GIL\nConstraint', 'Memory\nManagement']
+    impact_scores = [85, 60, 45, 30, 25, 15]  # Bottleneck impact scores
     colors = ['red', 'orange', 'yellow', 'lightblue', 'lightgreen', 'lightgray']
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
     
-    # 막대 그래프
+    # Bar chart
     bars = ax1.bar(bottlenecks, impact_scores, color=colors, alpha=0.8)
-    ax1.set_ylabel('성능 영향도 점수')
-    ax1.set_title('병목점별 성능 영향 분석', fontweight='bold')
+    ax1.set_ylabel('Performance Impact Score')
+    ax1.set_title('Performance Impact Analysis by Bottleneck', fontweight='bold')
     ax1.grid(True, alpha=0.3)
     
-    # 값 표시
+    # Show values
     for bar, score in zip(bars, impact_scores):
         height = bar.get_height()
         ax1.text(bar.get_x() + bar.get_width()/2., height + 1,
                 f'{score}', ha='center', va='bottom', fontweight='bold')
     
-    # 파이 차트
+    # Pie chart
     ax2.pie(impact_scores, labels=bottlenecks, colors=colors, autopct='%1.1f%%', 
            startangle=90)
-    ax2.set_title('병목점 비중 분포', fontweight='bold')
+    ax2.set_title('Bottleneck Distribution', fontweight='bold')
     
-    plt.suptitle('Python 웹 크롤러 병목점 분석', fontsize=16, fontweight='bold')
+    plt.suptitle('Python Web Crawler Bottleneck Analysis', fontsize=16, fontweight='bold')
     plt.tight_layout()
     plt.savefig(output_dir / 'bottleneck_analysis.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def create_scale_limits_chart():
-    """확장성 한계 분석"""
+    """Scalability limits analysis"""
     concurrent_requests = [10, 25, 50, 100, 150, 200]
     performance = [14.5, 16.2, 14.0, 8.5, 5.2, 3.5]
     error_rates = [2, 5, 8, 12, 15, 17]
     
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
     
-    # 성능 vs 동시 요청 수
-    ax1.plot(concurrent_requests, performance, 'bo-', linewidth=2, markersize=8, label='성능')
-    ax1.axhline(y=28, color='red', linestyle='--', linewidth=2, label='목표 (28 pages/sec)')
-    ax1.set_xlabel('동시 요청 수')
-    ax1.set_ylabel('성능 (pages/sec)')
-    ax1.set_title('동시 요청 수 vs 성능', fontweight='bold')
+    # Performance vs concurrent requests
+    ax1.plot(concurrent_requests, performance, 'bo-', linewidth=2, markersize=8, label='Performance')
+    ax1.axhline(y=28, color='red', linestyle='--', linewidth=2, label='Target (28 pages/sec)')
+    ax1.set_xlabel('Concurrent Requests')
+    ax1.set_ylabel('Performance (pages/sec)')
+    ax1.set_title('Concurrent Requests vs Performance', fontweight='bold')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # 에러율 vs 동시 요청 수
-    ax2.plot(concurrent_requests, error_rates, 'ro-', linewidth=2, markersize=8, label='에러율')
-    ax2.set_xlabel('동시 요청 수')
-    ax2.set_ylabel('에러율 (%)')
-    ax2.set_title('동시 요청 수 vs 에러율', fontweight='bold')
+    # Error rate vs concurrent requests
+    ax2.plot(concurrent_requests, error_rates, 'ro-', linewidth=2, markersize=8, label='Error Rate')
+    ax2.set_xlabel('Concurrent Requests')
+    ax2.set_ylabel('Error Rate (%)')
+    ax2.set_title('Concurrent Requests vs Error Rate', fontweight='bold')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     
-    plt.suptitle('Python 웹 크롤러 확장성 한계', fontsize=16, fontweight='bold')
+    plt.suptitle('Python Web Crawler Scalability Limits', fontsize=16, fontweight='bold')
     plt.tight_layout()
     plt.savefig(output_dir / 'scale_limits.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def main():
-    """모든 시각화 생성"""
+    """Generate all visualizations"""
     print("Creating performance visualizations...")
     
     create_performance_timeline()
-    print("✓ Performance timeline created")
+    print("[OK] Performance timeline created")
     
     create_cpu_utilization_chart()
-    print("✓ CPU utilization chart created")
+    print("[OK] CPU utilization chart created")
     
     create_gil_comparison()
-    print("✓ GIL comparison chart created")
+    print("[OK] GIL comparison chart created")
     
     create_bottleneck_analysis()
-    print("✓ Bottleneck analysis created")
+    print("[OK] Bottleneck analysis created")
     
     create_scale_limits_chart()
-    print("✓ Scale limits chart created")
+    print("[OK] Scale limits chart created")
     
     print(f"\nAll visualizations saved to: {output_dir.absolute()}")
     print("Generated files:")
