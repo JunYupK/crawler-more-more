@@ -6,10 +6,11 @@ from pathlib import Path
 
 
 class TrancoURLLoader:
-    def __init__(self):
-        self.tranco_url = "https://tranco-list.eu/download/PY7M/50"
+    def __init__(self, top_n=50):
+        self.top_n = top_n
+        self.tranco_url = f"https://tranco-list.eu/download/PY7M/{top_n}"
         self.data_dir = Path("data")
-        self.output_file = self.data_dir / "tranco_urls.txt"
+        self.output_file = self.data_dir / f"tranco_top_{top_n}_urls.txt"
     
     async def download_tranco_list(self) -> List[str]:
         async with aiohttp.ClientSession() as session:
@@ -42,6 +43,7 @@ class TrancoURLLoader:
                 f.write(f"{url}\n")
         
         print(f"Generated {len(urls)} URLs in {self.output_file}")
+        print(f"Sample URLs: {urls[:5]}")
         return str(self.output_file)
     
     def load_urls_from_file(self) -> List[str]:
@@ -52,8 +54,8 @@ class TrancoURLLoader:
             return [line.strip() for line in f if line.strip()]
 
 
-async def get_tranco_urls() -> List[str]:
-    loader = TrancoURLLoader()
+async def get_tranco_urls(top_n=50) -> List[str]:
+    loader = TrancoURLLoader(top_n)
     
     if not loader.output_file.exists():
         await loader.generate_url_file()

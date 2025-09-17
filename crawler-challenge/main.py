@@ -26,10 +26,12 @@ async def main():
             successful = sum(1 for r in results if r['success'])
             print(f"SUCCESS: {successful}/{len(results)} pages crawled successfully")
             
-            # Show some sample results
+            # Show some sample results with CPU processing info
             for result in results[:5]:
                 if result['success']:
-                    print(f"  {result['url']} - {result['status']} - {result['title'][:50]}...")
+                    print(f"  {result['url']} - {result['status']} - {result['title'][:30]}...")
+                    print(f"    Words: {result.get('word_count', 0)}, Unique: {result.get('unique_words', 0)}, "
+                          f"Links: {result.get('links_found', 0)}, Hash: {result.get('content_hash', 'N/A')}")
                 else:
                     print(f"  {result['url']} - Error: {result['error']}")
             

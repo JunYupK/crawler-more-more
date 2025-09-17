@@ -2,3 +2,5 @@ aiohttp
 aioredis
 beautifulsoup4
 psutil
+matplotlib
+numpy
