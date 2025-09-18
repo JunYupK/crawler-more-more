@@ -91,6 +91,11 @@ class DatabaseManager:
 
     def add_to_batch(self, url: str, html_content: str):
         """배치에 데이터 추가"""
+        # 이미 배치에 있는 URL인지 확인 (중복 방지)
+        if any(item['url'] == url for item in self.batch_buffer):
+            logger.warning(f"Duplicate URL in batch, skipping: {url}")
+            return
+
         domain = self.extract_domain(url)
         title = self.extract_title_from_html(html_content)
         metadata = self.create_metadata(html_content, url)
