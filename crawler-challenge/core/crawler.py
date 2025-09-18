@@ -8,11 +8,12 @@ from core.heavy_processing import heavy_html_processing
 
 
 class WebCrawler:
-    def __init__(self, metrics_monitor=None):
+    def __init__(self, metrics_monitor=None, database_manager=None):
         self.semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         self.session = None
         self.results = []
         self.metrics_monitor = metrics_monitor
+        self.database_manager = database_manager
         
     async def __aenter__(self):
         connector = aiohttp.TCPConnector(
@@ -44,18 +45,22 @@ class WebCrawler:
     async def fetch_page(self, url: str) -> Dict[str, Any]:
         if self.metrics_monitor:
             self.metrics_monitor.increment_active_tasks()
-        
+
         async with self.semaphore:
             try:
                 async with self.session.get(url) as response:
                     content = await response.text()
-                    
+
                     # Heavy CPU processing to trigger GIL bottleneck
                     processing_result = heavy_html_processing(content, url)
-                    
+
+                    # DB에 저장 (배치로 처리됨)
+                    if self.database_manager:
+                        self.database_manager.add_to_batch(url, content)
+
                     if self.metrics_monitor:
                         self.metrics_monitor.increment_pages()
-                    
+
                     return {
                         'url': url,
                         'status': response.status,
