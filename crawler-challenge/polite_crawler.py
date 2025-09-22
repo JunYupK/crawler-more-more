@@ -9,6 +9,12 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+# work_logger import 추가
+try:
+    from work_logger import WorkLogger
+except ImportError:
+    WorkLogger = None
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -48,6 +54,9 @@ class PoliteCrawler:
         # 글로벌 레이트 리미터
         self.global_semaphore = asyncio.Semaphore(20)  # 동시 요청 20개
         self.session: Optional[aiohttp.ClientSession] = None
+
+        # 작업 로거 추가
+        self.work_logger = WorkLogger() if WorkLogger else None
 
     async def __aenter__(self):
         """Context manager 진입"""
@@ -351,11 +360,11 @@ class PoliteCrawler:
                 result = await self.fetch_url_politely(url)
                 results.append(result)
 
-                # 성공/실패 로깅
+                # 성공/실패 로깅 (이모지 제거)
                 if result['success']:
-                    logger.debug(f"✅ {url} - {result['status']}")
+                    logger.debug(f"[OK] {url} - {result['status']}")
                 else:
-                    logger.debug(f"❌ {url} - {result['error']}")
+                    logger.debug(f"[FAIL] {url} - {result['error']}")
 
             except Exception as e:
                 logger.error(f"도메인 크롤링 오류 ({url}): {e}")
@@ -414,27 +423,43 @@ async def main():
     ]
 
     async with PoliteCrawler() as crawler:
-        print("🤖 정중한 크롤러 테스트 시작")
+        print("[START] 정중한 크롤러 테스트 시작")
 
         results = await crawler.crawl_batch_politely(test_urls)
 
-        print(f"\n📊 크롤링 결과:")
+        print(f"\n[RESULTS] 크롤링 결과:")
         successful = sum(1 for r in results if r['success'])
         print(f"  성공: {successful}/{len(results)}")
 
         for result in results:
-            status = "✅" if result['success'] else "❌"
+            status = "[OK]" if result['success'] else "[FAIL]"
             print(f"  {status} {result['url']} - {result.get('status', result.get('error'))}")
 
-        print(f"\n🌐 도메인 통계:")
+        print(f"\n[DOMAINS] 도메인 통계:")
         domain_stats = crawler.get_domain_stats()
         for domain, stats in domain_stats.items():
             print(f"  {domain}: {stats['request_count']}회 요청, {stats['crawl_delay']}초 딜레이")
 
-        print(f"\n📈 전체 요약:")
+        print(f"\n[SUMMARY] 전체 요약:")
         summary = crawler.get_crawling_summary()
         for key, value in summary.items():
             print(f"  {key}: {value}")
+
+        # 작업 로깅
+        if crawler.work_logger:
+            crawler.work_logger.log_and_commit(
+                title="정중한 크롤링 시스템 테스트 완료",
+                description=f"robots.txt 준수와 도메인별 딜레이를 적용한 {len(test_urls)}개 사이트 크롤링을 완료했습니다.",
+                details={
+                    "총 요청": len(results),
+                    "성공률": f"{(successful/len(results)*100):.1f}%",
+                    "도메인 수": len(domain_stats),
+                    "평균 딜레이": f"{summary['average_delay']:.1f}초",
+                    "상태": "정상 작동"
+                }
+            )
+
+        return results
 
 if __name__ == "__main__":
     asyncio.run(main())
