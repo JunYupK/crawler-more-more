@@ -344,21 +344,21 @@ async def main():
     urls = await manager.prepare_url_dataset(initial_count=1000, force_update=False)
 
     if urls:
-        print(f"\n✅ 총 {len(urls)}개 URL 준비 완료")
+        print(f"\n[OK] 총 {len(urls)}개 URL 준비 완료")
 
         # 상위 10개 출력
-        print("\n📊 상위 10개 URL:")
+        print("\n[LIST] 상위 10개 URL:")
         for i, url_info in enumerate(urls[:10], 1):
             print(f"{i:2d}. [{url_info['priority']:4d}] {url_info['url']} (순위: {url_info['rank']})")
 
         # 도메인 통계
         domain_stats = manager.get_domain_stats(urls)
-        print(f"\n🌐 상위 5개 도메인별 URL 수:")
+        print(f"\n[STATS] 상위 5개 도메인별 URL 수:")
         for domain, count in list(domain_stats.items())[:5]:
             print(f"  {domain}: {count}개")
 
     else:
-        print("❌ URL 데이터셋 준비 실패")
+        print("[ERROR] URL 데이터셋 준비 실패")
 
 if __name__ == "__main__":
     asyncio.run(main())
