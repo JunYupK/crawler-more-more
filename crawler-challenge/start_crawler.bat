@@ -1,4 +1,6 @@
 @echo off
+cd /d %~dp0
+
 echo Starting 24-Hour Resilient Crawler...
 echo ====================================
 
