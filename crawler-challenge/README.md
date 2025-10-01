@@ -319,3 +319,12 @@ start_crawler.bat 파일이 어디서 실행되든 항상 올바른 경로에서
 - 수정 내용: 스크립트 최상단에 `cd /d %~dp0` 추가
 - 기대 효과: 경로 문제 없이 크롤러 정상 실행
 
+
+## 크롤러 멈춤 현상 해결 및 Tranco 연동 방식 개선 (2025-10-01 16:16:04)
+
+26시간 이상 멈추던 크롤러의 원인이었던 Tranco 목록 다운로드 실패 문제를 해결했습니다. 기존의 불안정한 URL 직접 접근 방식 대신, 공식 tranco 라이브러리를 사용하도록 tranco_manager.py를 리팩토링하여 안정성을 높였습니다.
+
+**세부 정보:**
+- 수정 파일: tranco_manager.py, enterprise_crawler.py, requirements.txt
+- 핵심 변경: 공식 tranco 라이브러리 도입 및 관련 로직 수정
+

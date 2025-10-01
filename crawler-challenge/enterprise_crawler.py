@@ -22,7 +22,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('enterprise_crawler.log'),
+        logging.FileHandler('enterprise_crawler.log', encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -111,8 +111,7 @@ class EnterpriseCrawler:
 
             # Tranco 리스트에서 URL 생성
             urls = await self.tranco_manager.prepare_url_dataset(
-                initial_count=self.initial_url_count,
-                force_update=False
+                initial_count=self.initial_url_count
             )
 
             if not urls:
