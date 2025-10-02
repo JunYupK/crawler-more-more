@@ -78,7 +78,6 @@ class EnterpriseCrawler:
             # 3. Database Manager
             logger.info("3. Database Manager 초기화...")
             self.db_manager = DatabaseManager()
-            self.db_manager.connect()
 
             # 4. Progress Tracker
             logger.info("4. Progress Tracker 초기화...")
@@ -93,11 +92,11 @@ class EnterpriseCrawler:
             await self.metrics_monitor.start_monitoring()
 
             # 6. Polite Crawler
-            logger.info("6. Polite Crawler 초기화...")
-            self.polite_crawler = PoliteCrawler()
+            logger.info("6. Polite Crawler 초기화 (robots.txt 무시 모드)...")
+            self.polite_crawler = PoliteCrawler(respect_robots_txt=False)
             await self.polite_crawler.__aenter__()
 
-            logger.info("✅ 모든 컴포넌트 초기화 완료")
+            logger.info("[OK] 모든 컴포넌트 초기화 완료")
             return True
 
         except Exception as e:
@@ -170,10 +169,12 @@ class EnterpriseCrawler:
 
                     else:
                         # 실패 처리
+                        error_message = result.get('error', 'Unknown error')
+                        logger.warning(f"Crawl failed for {result['url']}: {error_message}")
                         error_info = {
                             'type': 'crawl_error',
-                            'message': result.get('error', 'Unknown error'),
-                            'recoverable': 'timeout' in result.get('error', '').lower()
+                            'message': error_message,
+                            'recoverable': 'timeout' in error_message.lower()
                         }
 
                         self.queue_manager.mark_completed(
@@ -228,23 +229,23 @@ class EnterpriseCrawler:
                 'error_rate': self.total_failed / self.total_processed if self.total_processed > 0 else 0,
                 'pages_per_minute': round(pages_per_minute, 2),
                 'uptime_minutes': uptime_minutes,
-
-                # 큐 상태
                 'queue_pending': queue_stats.get('total_pending', 0),
                 'queue_completed': queue_stats.get('completed', 0),
                 'completion_rate': queue_stats.get('completion_rate', 0),
-
-                # 크롤러 상태
                 'crawler_domains': crawler_summary.get('total_domains', 0),
                 'crawler_blocked_domains': crawler_summary.get('blocked_domains', 0),
                 'crawler_average_delay': crawler_summary.get('average_delay', 0),
-
-                # DB 상태
-                'db_pages_count': self.db_manager.get_crawled_count() if self.db_manager else 0
             }
 
-            self.progress_tracker.save_progress(stats)
+            # DB 상태
+            db_pool_stats = self.db_manager.get_pool_stats() if self.db_manager else {}
+            stats.update({
+                'db_pages_count': self.db_manager.get_crawled_count() if self.db_manager else 0,
+                'db_pool_min': db_pool_stats.get('pool_min', 0),
+                'db_pool_max': db_pool_stats.get('pool_max', 0),
+            })
 
+            self.progress_tracker.save_progress(stats)
         except Exception as e:
             logger.error(f"진행 상황 저장 실패: {e}")
 
@@ -315,7 +316,7 @@ class EnterpriseCrawler:
                 await self.polite_crawler.__aexit__(None, None, None)
 
             if self.db_manager:
-                self.db_manager.disconnect()
+                self.db_manager.close_all_connections()
 
             if self.metrics_monitor:
                 await self.metrics_monitor.stop_monitoring()
@@ -323,7 +324,7 @@ class EnterpriseCrawler:
             if self.progress_tracker:
                 self.progress_tracker.mark_session_completed()
 
-            logger.info("✅ 리소스 정리 완료")
+            logger.info("[OK] 리소스 정리 완료")
 
         except Exception as e:
             logger.error(f"리소스 정리 오류: {e}")
@@ -359,6 +360,8 @@ class EnterpriseCrawler:
         if self.db_manager:
             db_count = self.db_manager.get_crawled_count()
             logger.info(f"DB 저장       : {db_count:,}개")
+            pool_stats = self.db_manager.get_pool_stats()
+            logger.info(f"DB 풀 (최대)  : {pool_stats.get('pool_max', 0)}")
 
         logger.info("="*60)
 
@@ -400,8 +403,8 @@ async def main():
 
     finally:
         # 정리
-        await crawler.cleanup()
         crawler.print_final_stats()
+        await crawler.cleanup()
 
 if __name__ == "__main__":
     asyncio.run(main())

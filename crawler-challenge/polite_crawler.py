@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RobotRules:
     """robots.txt 규칙"""
-    can_fetch: bool = True
+    parser: RobotFileParser = field(default_factory=RobotFileParser)
     crawl_delay: int = 1  # 기본 1초
     last_accessed: datetime = field(default_factory=datetime.now)
     rules_text: str = ""
@@ -41,14 +41,14 @@ class DomainState:
 class PoliteCrawler:
     """정중한 크롤링을 위한 robots.txt 준수 크롤러"""
 
-    def __init__(self):
+    def __init__(self, respect_robots_txt: bool = True):
         self.domain_states: Dict[str, DomainState] = {}
         self.user_agent = "PoliteCrawler/1.0 (+https://example.com/bot)"
 
         # 기본 크롤링 정책
         self.default_delay = 2  # 기본 2초 딜레이
         self.max_delay = 30     # 최대 30초 딜레이
-        self.respect_robots = True
+        self.respect_robots_txt = respect_robots_txt
         self.max_errors_per_domain = 10
 
         # 글로벌 레이트 리미터
@@ -120,43 +120,38 @@ class PoliteCrawler:
 
         except Exception as e:
             logger.warning(f"robots.txt 확인 실패 ({domain}): {e}")
-            return RobotRules(can_fetch=True, crawl_delay=self.default_delay)
+            # 실패 시 기본적으로 허용하는 규칙 반환
+            return self._parse_robots_txt("", domain)
 
     def _parse_robots_txt(self, robots_content: str, domain: str) -> RobotRules:
         """robots.txt 내용 파싱"""
         try:
-            if not robots_content.strip():
-                return RobotRules(can_fetch=True, crawl_delay=self.default_delay)
-
             # Python의 robotparser 사용
             rp = RobotFileParser()
-            rp.set_url(f"https://{domain}/robots.txt")
-            rp.read()
-
-            # 크롤링 허용 여부 확인
-            can_fetch = rp.can_fetch(self.user_agent, "/")
+            rp.parse(robots_content.splitlines())
 
             # Crawl-delay 추출
             crawl_delay = self.default_delay
 
-            # robots.txt에서 crawl-delay 직접 파싱
-            crawl_delay_match = re.search(r'crawl-delay:\s*(\d+)', robots_content.lower())
-            if crawl_delay_match:
-                crawl_delay = min(int(crawl_delay_match.group(1)), self.max_delay)
+            if robots_content.strip():
+                # robots.txt에서 crawl-delay 직접 파싱
+                crawl_delay_match = re.search(r'crawl-delay:\s*(\d+\.?\d*)', robots_content.lower())
+                if crawl_delay_match:
+                    crawl_delay = min(float(crawl_delay_match.group(1)), self.max_delay)
 
-            # 일부 사이트에서 사용하는 다른 형식들
-            delay_patterns = [
-                r'request-rate:\s*1/(\d+)',  # request-rate: 1/10 (10초마다 1회)
-                r'visit-time:\s*(\d+)',     # visit-time: 5
-            ]
+                # 일부 사이트에서 사용하는 다른 형식들
+                delay_patterns = [
+                    r'request-rate:\s*1/(\d+)',  # request-rate: 1/10 (10초마다 1회)
+                    r'visit-time:\s*(\d+)',     # visit-time: 5
+                ]
 
-            for pattern in delay_patterns:
-                match = re.search(pattern, robots_content.lower())
-                if match:
-                    crawl_delay = max(crawl_delay, min(int(match.group(1)), self.max_delay))
+                for pattern in delay_patterns:
+                    match = re.search(pattern, robots_content.lower())
+                    if match:
+                        crawl_delay = max(crawl_delay, min(int(match.group(1)), self.max_delay))
 
             return RobotRules(
-                can_fetch=can_fetch,
+                parser=rp,
                 crawl_delay=crawl_delay,
                 rules_text=robots_content[:500],  # 처음 500자만 저장
                 user_agent=self.user_agent
@@ -164,7 +159,7 @@ class PoliteCrawler:
 
         except Exception as e:
             logger.warning(f"robots.txt 파싱 실패 ({domain}): {e}")
-            return RobotRules(can_fetch=True, crawl_delay=self.default_delay)
+            return RobotRules(parser=RobotFileParser(), crawl_delay=self.default_delay)
 
     def _get_domain_state(self, domain: str) -> DomainState:
         """도메인 상태 획득"""
@@ -174,6 +169,8 @@ class PoliteCrawler:
 
     async def is_allowed_to_fetch(self, url: str) -> Tuple[bool, str]:
         """URL 크롤링 허용 여부 확인"""
+        if not self.respect_robots_txt:
+            return True, "허용 (robots.txt 무시)"
         try:
             parsed_url = urlparse(url)
             domain = parsed_url.netloc
@@ -182,6 +179,7 @@ class PoliteCrawler:
 
             # 너무 많은 에러 발생시 차단
             if domain_state.error_count >= self.max_errors_per_domain:
+                domain_state.is_blocked = True
                 return False, f"도메인 에러 한도 초과 ({domain_state.error_count})"
 
             # 이미 차단된 도메인
@@ -195,11 +193,10 @@ class PoliteCrawler:
                 domain_state.robots_checked = True
                 domain_state.crawl_delay = robots_rules.crawl_delay
 
-            # robots.txt 규칙 확인
-            if (domain_state.robots_rules and
-                not domain_state.robots_rules.can_fetch):
-                domain_state.is_blocked = True
-                return False, "robots.txt에 의해 차단됨"
+            # robots.txt 규칙 확인 (URL별로)
+            if domain_state.robots_rules:
+                if not domain_state.robots_rules.parser.can_fetch(self.user_agent, url):
+                    return False, f"robots.txt에 의해 차단됨: {url}"
 
             # 딜레이 확인
             now = datetime.now()
@@ -390,7 +387,6 @@ class PoliteCrawler:
                 'crawl_delay': state.crawl_delay,
                 'is_blocked': state.is_blocked,
                 'robots_checked': state.robots_checked,
-                'can_fetch': state.robots_rules.can_fetch if state.robots_rules else True,
                 'last_access': state.last_access.isoformat() if state.last_access else None
             }
         return stats

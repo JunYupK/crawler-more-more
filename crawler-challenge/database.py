@@ -8,39 +8,69 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+import psycopg2
+import psycopg2.extras
+from psycopg2 import pool
+from urllib.parse import urlparse
+import json
+from typing import List, Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
+
 class DatabaseManager:
-    def __init__(self, host="localhost", port="5432", database="crawler_db",
-                 user="postgres", password="postgres"):
-        self.connection_params = {
-            'host': host,
-            'port': port,
-            'database': database,
-            'user': user,
-            'password': password
-        }
-        self.connection = None
+    _pool = None
+
+    def __init__(self, min_conn=1, max_conn=10, host="localhost", port="5432", 
+                 database="crawler_db", user="postgres", password="postgres"):
+        if not DatabaseManager._pool:
+            self.connection_params = {
+                'host': host,
+                'port': port,
+                'database': database,
+                'user': user,
+                'password': password
+            }
+            try:
+                DatabaseManager._pool = pool.ThreadedConnectionPool(
+                    min_conn, max_conn, **self.connection_params
+                )
+                logger.info(f"DB 커넥션 풀 생성 성공 (min: {min_conn}, max: {max_conn})")
+            except psycopg2.Error as e:
+                logger.error(f"DB 커넥션 풀 생성 실패: {e}")
+                raise
+        
         self.batch_size = 1000
         self.batch_buffer = []
 
-    def connect(self):
-        """데이터베이스 연결"""
+    def get_connection(self):
+        """커넥션 풀에서 커넥션 가져오기"""
         try:
-            self.connection = psycopg2.connect(**self.connection_params)
-            self.connection.autocommit = False
-            logger.info("PostgreSQL 연결 성공")
-        except Error as e:
-            logger.error(f"PostgreSQL 연결 실패: {e}")
+            return self._pool.getconn()
+        except psycopg2.Error as e:
+            logger.error(f"커넥션 풀에서 커넥션 가져오기 실패: {e}")
             raise
 
-    def disconnect(self):
-        """데이터베이스 연결 해제"""
-        if self.connection:
-            # 남은 배치 처리
-            if self.batch_buffer:
-                self.flush_batch()
-            self.connection.close()
-            self.connection = None
-            logger.info("PostgreSQL 연결 해제")
+    def release_connection(self, conn):
+        """커넥션을 풀에 반환"""
+        if conn:
+            self._pool.putconn(conn)
+
+    def get_pool_stats(self) -> Dict[str, int]:
+        """커넥션 풀 상태 조회"""
+        if self._pool:
+            return {
+                'pool_min': self._pool.minconn,
+                'pool_max': self._pool.maxconn,
+            }
+        return {}
+
+    def close_all_connections(self):
+        """모든 커넥션 종료"""
+        if self._pool:
+            self._pool.closeall()
+            DatabaseManager._pool = None
+            logger.info("모든 DB 커넥션 종료")
 
     def extract_domain(self, url: str) -> str:
         """URL에서 도메인 추출"""
@@ -131,97 +161,74 @@ class DatabaseManager:
         if not self.batch_buffer:
             return
 
-        if not self.connection:
-            self.connect()
-
+        conn = self.get_connection()
         try:
-            cursor = self.connection.cursor()
+            with conn.cursor() as cursor:
+                insert_query = """
+                    INSERT INTO crawled_pages (url, domain, title, content_text, metadata)
+                    VALUES %s
+                    ON CONFLICT (url) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        content_text = EXCLUDED.content_text,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = CURRENT_TIMESTAMP
+                """
+                values = [(
+                    item['url'], item['domain'], item['title'],
+                    item['content_text'], item['metadata']
+                ) for item in self.batch_buffer]
 
-            # execute_values를 사용한 배치 삽입
-            insert_query = """
-                INSERT INTO crawled_pages (url, domain, title, content_text, metadata)
-                VALUES %s
-                ON CONFLICT (url) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    content_text = EXCLUDED.content_text,
-                    metadata = EXCLUDED.metadata,
-                    updated_at = CURRENT_TIMESTAMP
-            """
-
-            # 데이터 튜플로 변환
-            values = [(
-                item['url'],
-                item['domain'],
-                item['title'],
-                item['content_text'],
-                item['metadata']
-            ) for item in self.batch_buffer]
-
-            psycopg2.extras.execute_values(
-                cursor, insert_query, values, template=None, page_size=100
-            )
-
-            self.connection.commit()
-            logger.info(f"{len(self.batch_buffer)}개 레코드 배치 저장 완료")
-
-            # 배치 버퍼 초기화
-            self.batch_buffer.clear()
-
-        except Error as e:
+                psycopg2.extras.execute_values(cursor, insert_query, values, page_size=100)
+                conn.commit()
+                logger.info(f"{len(self.batch_buffer)}개 레코드 배치 저장 완료")
+                self.batch_buffer.clear()
+        except psycopg2.Error as e:
             logger.error(f"배치 저장 실패: {e}")
-            self.connection.rollback()
-            raise
+            conn.rollback()
         finally:
-            cursor.close()
+            self.release_connection(conn)
 
     def get_crawled_count(self) -> int:
         """크롤링된 페이지 수 조회"""
-        if not self.connection:
-            self.connect()
-
+        conn = self.get_connection()
         try:
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT COUNT(*) FROM crawled_pages")
-            count = cursor.fetchone()[0]
-            return count
-        except Error as e:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM crawled_pages")
+                return cursor.fetchone()[0]
+        except psycopg2.Error as e:
             logger.error(f"카운트 조회 실패: {e}")
             return 0
         finally:
-            cursor.close()
+            self.release_connection(conn)
 
     def get_domain_stats(self) -> List[Dict]:
         """도메인별 통계 조회"""
-        if not self.connection:
-            self.connect()
-
+        conn = self.get_connection()
         try:
-            cursor = self.connection.cursor()
-            cursor.execute("""
-                SELECT domain, COUNT(*) as count,
-                       AVG(LENGTH(content_text)) as avg_content_length
-                FROM crawled_pages
-                GROUP BY domain
-                ORDER BY count DESC
-            """)
-            results = cursor.fetchall()
-            return [
-                {
-                    'domain': row[0],
-                    'count': row[1],
-                    'avg_content_length': float(row[2]) if row[2] else 0
-                }
-                for row in results
-            ]
-        except Error as e:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT domain, COUNT(*) as count,
+                           AVG(LENGTH(content_text)) as avg_content_length
+                    FROM crawled_pages
+                    GROUP BY domain
+                    ORDER BY count DESC
+                """)
+                results = cursor.fetchall()
+                return [
+                    {'domain': row[0], 'count': row[1], 'avg_content_length': float(row[2]) if row[2] else 0}
+                    for row in results
+                ]
+        except psycopg2.Error as e:
             logger.error(f"도메인 통계 조회 실패: {e}")
             return []
         finally:
-            cursor.close()
+            self.release_connection(conn)
 
     def __enter__(self):
-        self.connect()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.disconnect()
+        # 남은 배치 처리
+        if self.batch_buffer:
+            self.flush_batch()
+        self.close_all_connections()
