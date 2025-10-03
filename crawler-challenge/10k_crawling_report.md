@@ -182,8 +182,43 @@ DB 저장: 5,598개 (중복 제거 후)
 ```
 
 ### 실패 원인 분석
-- **네트워크 타임아웃**: 주요 실패 요인
-- **서버 응답 거부**: robots.txt 및 접근 제한
+
+#### 주요 실패 유형별 상세 분석
+
+**1. 연결 재설정 오류 (ConnectionResetError)**
+- **발생 횟수**: 20회
+- **오류 코드**: `[WinError 10054] 현재 연결은 원격 호스트에 의해 강제로 끊겼습니다`
+- **원인**: 서버에서 연결을 강제로 차단하거나 방화벽에 의한 차단
+
+**2. 콘텐츠 인코딩 문제**
+- **주요 사이트**: 성인 콘텐츠 사이트 및 일본어 사이트
+- **문제 사이트 예시**:
+  - `xvideos.com`, `pornhub.com`, `youporn.com` - UTF-8 인코딩 오류
+  - `oricon.co.jp`, `itmedia.co.jp` - 일본어 문자 인코딩 충돌
+- **기술적 원인**: 비표준 문자 인코딩 또는 바이너리 콘텐츠 처리 실패
+
+**3. 액세스 제한 및 차단**
+- **차단된 사이트**: 성인 콘텐츠 및 특수 콘텐츠 사이트
+- **실패 사이트 목록**:
+  ```
+  - exhentai.org, e-hentai.org (성인 콘텐츠 차단)
+  - redtube.com, xhamster19.com (접근 제한)
+  - rule34.xxx, e621.net (콘텐츠 필터링)
+  - thisvid.com, sexvid.xxx (지역 차단)
+  ```
+
+**4. 중복 URL 처리**
+- **총 중복 감지**: 257개 URL
+- **중복 패턴**: HTTP/HTTPS 버전 중복
+- **대표 중복 사이트**:
+  ```
+  - zoom.us (http/https)
+  - youtube.com, google.com, facebook.com
+  - wordpress.org/com, windows.net/com
+  ```
+
+**5. 네트워크 및 DNS 실패**
+- **타임아웃**: 10초 제한 시간 초과
 - **DNS 해석 실패**: 일부 도메인 접근 불가
 - **SSL 인증서 문제**: HTTPS 연결 실패
 
