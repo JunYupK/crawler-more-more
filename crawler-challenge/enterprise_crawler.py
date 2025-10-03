@@ -22,8 +22,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('enterprise_crawler.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
+        logging.FileHandler('enterprise_crawler.log', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -316,6 +315,7 @@ class EnterpriseCrawler:
                 await self.polite_crawler.__aexit__(None, None, None)
 
             if self.db_manager:
+                self.db_manager.flush_batch()
                 self.db_manager.close_all_connections()
 
             if self.metrics_monitor:
@@ -367,6 +367,8 @@ class EnterpriseCrawler:
 
 async def main():
     """메인 함수"""
+    print("크롤러 로그는 enterprise_crawler.log 파일에 기록됩니다.")
+    print("실시간 로그를 보려면 'tail -f enterprise_crawler.log' 명령을 사용하세요.")
     import argparse
 
     parser = argparse.ArgumentParser(description='Enterprise Crawler - Tranco Top 1M')
