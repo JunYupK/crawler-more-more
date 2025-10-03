@@ -6,3 +6,6 @@ matplotlib
 numpy
 psycopg2-binary
 tranco
+redis
+flask
+flask-socketio

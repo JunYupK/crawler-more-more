@@ -1,0 +1,172 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: crawler_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_MAX_CONNECTIONS: 100
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  # 마스터 크롤러 (URL 데이터셋 준비 및 조정)
+  crawler-master:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawler
+    environment:
+      - CRAWLER_MODE=master
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=crawler_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - WORKER_COUNT=4
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./:/app
+      - crawler_logs:/app/logs
+    networks:
+      - crawler_network
+
+  # 워커 크롤러들 (실제 크롤링 수행)
+  crawler-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawler
+    environment:
+      - CRAWLER_MODE=worker
+      - WORKER_ID=1
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=crawler_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - BATCH_SIZE=50
+      - WORKER_THREADS=2
+    depends_on:
+      - redis
+      - postgres
+      - crawler-master
+    volumes:
+      - ./:/app
+      - crawler_logs:/app/logs
+    networks:
+      - crawler_network
+
+  crawler-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawler
+    environment:
+      - CRAWLER_MODE=worker
+      - WORKER_ID=2
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=crawler_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - BATCH_SIZE=50
+      - WORKER_THREADS=2
+    depends_on:
+      - redis
+      - postgres
+      - crawler-master
+    volumes:
+      - ./:/app
+      - crawler_logs:/app/logs
+    networks:
+      - crawler_network
+
+  crawler-worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawler
+    environment:
+      - CRAWLER_MODE=worker
+      - WORKER_ID=3
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=crawler_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - BATCH_SIZE=50
+      - WORKER_THREADS=2
+    depends_on:
+      - redis
+      - postgres
+      - crawler-master
+    volumes:
+      - ./:/app
+      - crawler_logs:/app/logs
+    networks:
+      - crawler_network
+
+  crawler-worker-4:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawler
+    environment:
+      - CRAWLER_MODE=worker
+      - WORKER_ID=4
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=crawler_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - BATCH_SIZE=50
+      - WORKER_THREADS=2
+    depends_on:
+      - redis
+      - postgres
+      - crawler-master
+    volumes:
+      - ./:/app
+      - crawler_logs:/app/logs
+    networks:
+      - crawler_network
+
+  # 모니터링 대시보드
+  monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.monitor
+    environment:
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=crawler_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./:/app
+    networks:
+      - crawler_network
+
+networks:
+  crawler_network:
+    driver: bridge
+
+volumes:
+  redis_data:
+  postgres_data:
+  crawler_logs:
