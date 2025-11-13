@@ -1,0 +1,193 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-crawler-dashboard
+  namespace: crawler
+data:
+  crawler-dashboard.json: |-
+    {
+      "dashboard": {
+        "title": "Crawler Performance Dashboard",
+        "tags": ["crawler", "performance"],
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 1,
+        "refresh": "10s",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Crawler Worker Pods",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+            "targets": [
+              {
+                "expr": "count(kube_pod_status_phase{namespace=\"crawler\", pod=~\"crawler-worker.*\", phase=\"Running\"})",
+                "legendFormat": "Running Pods",
+                "refId": "A"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Total CPU Usage",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+            "targets": [
+              {
+                "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"crawler\", pod=~\"crawler-worker.*\"}[5m]))",
+                "legendFormat": "CPU Cores",
+                "refId": "A"
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "Total Memory Usage",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+            "targets": [
+              {
+                "expr": "sum(container_memory_working_set_bytes{namespace=\"crawler\", pod=~\"crawler-worker.*\"}) / 1024 / 1024 / 1024",
+                "legendFormat": "Memory (GB)",
+                "refId": "A"
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "title": "Redis Queue Length",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+            "targets": [
+              {
+                "expr": "redis_list_length{list=\"queue_priority_high\"} + redis_list_length{list=\"queue_priority_medium\"} + redis_list_length{list=\"queue_priority_normal\"}",
+                "legendFormat": "Total Queue",
+                "refId": "A"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "title": "CPU Usage per Pod",
+            "type": "graph",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+            "targets": [
+              {
+                "expr": "rate(container_cpu_usage_seconds_total{namespace=\"crawler\", pod=~\"crawler-worker.*\"}[5m])",
+                "legendFormat": "{{pod}}",
+                "refId": "A"
+              }
+            ],
+            "yaxes": [
+              {"format": "short", "label": "CPU Cores"},
+              {"format": "short"}
+            ]
+          },
+          {
+            "id": 6,
+            "title": "Memory Usage per Pod",
+            "type": "graph",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+            "targets": [
+              {
+                "expr": "container_memory_working_set_bytes{namespace=\"crawler\", pod=~\"crawler-worker.*\"} / 1024 / 1024 / 1024",
+                "legendFormat": "{{pod}}",
+                "refId": "A"
+              }
+            ],
+            "yaxes": [
+              {"format": "gbytes", "label": "Memory"},
+              {"format": "short"}
+            ]
+          },
+          {
+            "id": 7,
+            "title": "Queue Lengths by Priority",
+            "type": "graph",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+            "targets": [
+              {
+                "expr": "redis_list_length{list=\"queue_priority_high\"}",
+                "legendFormat": "High Priority",
+                "refId": "A"
+              },
+              {
+                "expr": "redis_list_length{list=\"queue_priority_medium\"}",
+                "legendFormat": "Medium Priority",
+                "refId": "B"
+              },
+              {
+                "expr": "redis_list_length{list=\"queue_priority_normal\"}",
+                "legendFormat": "Normal Priority",
+                "refId": "C"
+              }
+            ],
+            "yaxes": [
+              {"format": "short", "label": "Queue Length"},
+              {"format": "short"}
+            ]
+          },
+          {
+            "id": 8,
+            "title": "PostgreSQL Connections",
+            "type": "graph",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+            "targets": [
+              {
+                "expr": "pg_stat_activity_count",
+                "legendFormat": "Active Connections",
+                "refId": "A"
+              },
+              {
+                "expr": "pg_settings_max_connections",
+                "legendFormat": "Max Connections",
+                "refId": "B"
+              }
+            ],
+            "yaxes": [
+              {"format": "short", "label": "Connections"},
+              {"format": "short"}
+            ]
+          },
+          {
+            "id": 9,
+            "title": "Network Traffic",
+            "type": "graph",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+            "targets": [
+              {
+                "expr": "rate(container_network_receive_bytes_total{namespace=\"crawler\", pod=~\"crawler-worker.*\"}[5m])",
+                "legendFormat": "RX {{pod}}",
+                "refId": "A"
+              },
+              {
+                "expr": "rate(container_network_transmit_bytes_total{namespace=\"crawler\", pod=~\"crawler-worker.*\"}[5m])",
+                "legendFormat": "TX {{pod}}",
+                "refId": "B"
+              }
+            ],
+            "yaxes": [
+              {"format": "Bps", "label": "Bytes/sec"},
+              {"format": "short"}
+            ]
+          },
+          {
+            "id": 10,
+            "title": "Pod Restarts",
+            "type": "graph",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+            "targets": [
+              {
+                "expr": "kube_pod_container_status_restarts_total{namespace=\"crawler\", pod=~\"crawler-worker.*\"}",
+                "legendFormat": "{{pod}}",
+                "refId": "A"
+              }
+            ],
+            "yaxes": [
+              {"format": "short", "label": "Restarts"},
+              {"format": "short"}
+            ]
+          }
+        ]
+      }
+    }

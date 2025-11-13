@@ -1,3 +1,220 @@
+## 📊 Phase 9: Prometheus & Grafana 모니터링 구축 (2025-11-13)
+
+**실시간 메트릭 수집 및 시각화 대시보드 구축**
+
+### 🎯 모니터링 목표
+
+K8s 크롤러의 **가시성 확보** 및 **성능 최적화**:
+- ✅ 실시간 메트릭 수집 (Prometheus)
+- ✅ 직관적 시각화 대시보드 (Grafana)
+- ✅ DB 및 큐 상태 모니터링
+- ✅ 자동 알림 및 이상 감지
+
+### 🏗️ 모니터링 아키텍처
+
+```
+┌───────────────────────────────────────────────┐
+│         Grafana Dashboard (Port 3000)          │
+│   • Crawler Performance                        │
+│   • Queue Monitoring                           │
+│   • Resource Usage                             │
+└────────────────┬──────────────────────────────┘
+                 │
+┌────────────────▼──────────────────────────────┐
+│       Prometheus (Port 9090)                   │
+│   • 15s scrape interval                        │
+│   • 15 days retention                          │
+│   • PromQL queries                             │
+└──┬────────┬──────────┬────────────┬───────────┘
+   │        │          │            │
+   ▼        ▼          ▼            ▼
+┌──────┐ ┌──────┐ ┌────────┐ ┌──────────┐
+│Crawler│ │Redis │ │Postgres│ │K8s API   │
+│Workers│ │Export│ │Exporter│ │Server    │
+└──────┘ └──────┘ └────────┘ └──────────┘
+```
+
+### 📊 수집 메트릭
+
+#### 1. **크롤러 워커 메트릭**
+- CPU 사용률 (Pod별, 전체)
+- 메모리 사용량 (Pod별, 전체)
+- 네트워크 트래픽 (RX/TX)
+- Pod 재시작 횟수
+
+#### 2. **큐 메트릭 (Redis)**
+- 큐 길이 (Priority별)
+- 처리 속도 (items/sec)
+- 메모리 사용량
+- 커넥션 수
+
+#### 3. **데이터베이스 메트릭 (PostgreSQL)**
+- Active 커넥션 수
+- 트랜잭션 속도
+- 데이터베이스 크기
+- 쿼리 성능
+
+#### 4. **K8s 클러스터 메트릭**
+- 노드 리소스 사용률
+- Pod 상태 및 Health
+- PVC 사용량
+
+### 📈 주요 PromQL 쿼리
+
+```promql
+# 워커 Pod 수
+count(kube_pod_status_phase{namespace="crawler", pod=~"crawler-worker.*", phase="Running"})
+
+# 총 CPU 사용량
+sum(rate(container_cpu_usage_seconds_total{namespace="crawler"}[5m]))
+
+# 총 큐 길이
+redis_list_length{list="queue_priority_high"} +
+redis_list_length{list="queue_priority_medium"} +
+redis_list_length{list="queue_priority_normal"}
+
+# DB 커넥션 수
+pg_stat_activity_count
+```
+
+### 🚀 빠른 배포
+
+```bash
+cd k8s/monitoring
+
+# 1. Prometheus 배포
+kubectl apply -f prometheus/prometheus-configmap.yaml
+kubectl apply -f prometheus/prometheus-deployment.yaml
+
+# 2. Grafana 배포
+kubectl apply -f grafana/grafana-configmap.yaml
+kubectl apply -f grafana/grafana-deployment.yaml
+kubectl apply -f grafana/crawler-dashboard-configmap.yaml
+
+# 3. Exporters 배포
+kubectl apply -f exporters.yaml
+
+# 4. (옵션) Ingress 배포
+kubectl apply -f ingress.yaml
+
+# 5. 접근
+kubectl port-forward -n crawler svc/grafana 3000:3000
+# http://localhost:3000 (admin/admin)
+```
+
+### 📁 모니터링 스택 구조
+
+```
+k8s/monitoring/
+├── prometheus/
+│   ├── prometheus-configmap.yaml      # Prometheus 설정
+│   └── prometheus-deployment.yaml     # Prometheus + RBAC
+├── grafana/
+│   ├── grafana-configmap.yaml        # Datasource + 설정
+│   ├── grafana-deployment.yaml       # Grafana + PVC
+│   ├── crawler-dashboard.json        # 크롤러 대시보드
+│   └── crawler-dashboard-configmap.yaml
+├── exporters.yaml                     # PostgreSQL + Redis Exporter
+├── ingress.yaml                      # 외부 접근용 Ingress
+└── MONITORING.md                     # 상세 가이드
+```
+
+### 📦 리소스 사용량
+
+| 컴포넌트 | CPU | 메모리 | 스토리지 |
+|---------|-----|--------|----------|
+| **Prometheus** | 500m-2 CPU | 1-4GB | 10GB PVC |
+| **Grafana** | 250m-1 CPU | 512MB-2GB | 5GB PVC |
+| **PostgreSQL Exporter** | 100m-500m | 128-512MB | - |
+| **Redis Exporter** | 100m-500m | 128-512MB | - |
+| **총합** | ~1-4 CPU | ~2-7GB | 15GB |
+
+### 🎨 Grafana 대시보드
+
+**사전 구성된 패널:**
+
+1. **개요 (Top Row)**
+   - Running Worker Pods: 현재 실행 중인 워커 수
+   - Total CPU Usage: 전체 CPU 사용량
+   - Total Memory Usage: 전체 메모리 사용량
+   - Redis Queue Length: 대기 중인 URL 수
+
+2. **리소스 모니터링**
+   - CPU Usage per Pod: Pod별 CPU 그래프
+   - Memory Usage per Pod: Pod별 메모리 그래프
+
+3. **큐 모니터링**
+   - Queue Lengths by Priority: 우선순위별 큐 길이
+   - Processing Rate: URL 처리 속도
+
+4. **데이터베이스**
+   - PostgreSQL Connections: 활성 커넥션
+   - Transaction Rate: 트랜잭션 속도
+
+5. **네트워크 & 안정성**
+   - Network Traffic: 네트워크 사용량
+   - Pod Restarts: Pod 재시작 추적
+
+### 🔔 알림 설정 (선택사항)
+
+Prometheus Alert Rules 예시:
+
+```yaml
+groups:
+  - name: crawler_alerts
+    rules:
+      - alert: HighQueueLength
+        expr: redis_list_length > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "큐 길이가 너무 높습니다"
+
+      - alert: HighMemoryUsage
+        expr: container_memory_working_set_bytes > 7516192768
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "메모리 사용량이 임계값을 초과했습니다"
+```
+
+### 💡 모니터링 활용
+
+**1. 성능 튜닝**
+- CPU/메모리 사용 패턴 분석
+- 병목 지점 식별
+- 리소스 할당 최적화
+
+**2. 자동 스케일링 검증**
+- KEDA 스케일링 효과 측정
+- 큐 길이와 워커 수 상관관계
+- 비용 효율성 분석
+
+**3. 이상 감지**
+- 비정상적인 메모리 증가
+- Pod 재시작 패턴
+- 네트워크 이상
+
+**4. 용량 계획**
+- 리소스 사용 추세 분석
+- 피크 타임 대비
+- 인프라 확장 계획
+
+### 📚 추가 리소스
+
+- **배포 가이드**: `k8s/monitoring/MONITORING.md`
+- **Prometheus 문서**: https://prometheus.io/docs/
+- **Grafana 문서**: https://grafana.com/docs/
+- **PromQL 치트시트**: https://promlabs.com/promql-cheat-sheet/
+
+**기본 접속 정보:**
+- Grafana: `admin / admin` (변경 필요!)
+- Prometheus: 인증 없음 (Ingress로 보호 권장)
+
+---
+
 ## 🚢 Phase 8: Kubernetes 배포 - 무한 확장 가능한 크롤러 (2025-11-13)
 
 **K8s 기반 자동 스케일링 및 분산 크롤링 아키텍처 구축**
