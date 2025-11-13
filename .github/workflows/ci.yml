@@ -46,7 +46,19 @@ jobs:
       run: |
         cd crawler-challenge
         python -c "import polite_crawler; import multithreaded_crawler; print('✅ Core modules import successfully')"
-        
+
+    - name: Run comprehensive test suite
+      run: |
+        cd crawler-challenge
+        chmod +x run_tests.sh
+        ./run_tests.sh
+
+    - name: Run Python unit tests
+      run: |
+        cd crawler-challenge
+        python tests/test_all_phases.py
+      continue-on-error: true
+
     - name: Validate Docker configuration
       run: |
         cd crawler-challenge
