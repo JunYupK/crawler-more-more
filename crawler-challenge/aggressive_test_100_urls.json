@@ -1,0 +1,17 @@
+{
+  "url_count": 100,
+  "successful": 0,
+  "failed": 100,
+  "success_rate": 0.0,
+  "duration_seconds": 10.82955527305603,
+  "pages_per_second": 9.233989529450053,
+  "pages_per_minute": 554.0393717670032,
+  "total_domains": 100,
+  "settings": {
+    "semaphore": 200,
+    "tcp_limit": 300,
+    "tcp_per_host": 20,
+    "crawl_delay": 0.5,
+    "timeout": 10
+  }
+}
