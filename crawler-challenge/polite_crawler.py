@@ -9,6 +9,23 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+# Config import 추가
+try:
+    from config.settings import (
+        GLOBAL_SEMAPHORE_LIMIT,
+        TCP_CONNECTOR_LIMIT,
+        TCP_CONNECTOR_LIMIT_PER_HOST,
+        DEFAULT_CRAWL_DELAY,
+        REQUEST_TIMEOUT
+    )
+except ImportError:
+    # Fallback to aggressive defaults
+    GLOBAL_SEMAPHORE_LIMIT = 200
+    TCP_CONNECTOR_LIMIT = 300
+    TCP_CONNECTOR_LIMIT_PER_HOST = 20
+    DEFAULT_CRAWL_DELAY = 0.5
+    REQUEST_TIMEOUT = 10
+
 # work_logger import 추가
 try:
     from work_logger import WorkLogger
@@ -45,14 +62,14 @@ class PoliteCrawler:
         self.domain_states: Dict[str, DomainState] = {}
         self.user_agent = "PoliteCrawler/1.0 (+https://example.com/bot)"
 
-        # 기본 크롤링 정책
-        self.default_delay = 2  # 기본 2초 딜레이
+        # 공격적 크롤링 정책
+        self.default_delay = DEFAULT_CRAWL_DELAY  # 0.5초로 감소
         self.max_delay = 30     # 최대 30초 딜레이
         self.respect_robots_txt = respect_robots_txt
         self.max_errors_per_domain = 10
 
-        # 글로벌 레이트 리미터
-        self.global_semaphore = asyncio.Semaphore(20)  # 동시 요청 20개
+        # 공격적 글로벌 레이트 리미터
+        self.global_semaphore = asyncio.Semaphore(GLOBAL_SEMAPHORE_LIMIT)  # 200개 동시 요청
         self.session: Optional[aiohttp.ClientSession] = None
 
         # 작업 로거 추가
@@ -61,8 +78,8 @@ class PoliteCrawler:
     async def __aenter__(self):
         """Context manager 진입"""
         connector = aiohttp.TCPConnector(
-            limit=100,
-            limit_per_host=5,  # 도메인당 최대 5개 연결
+            limit=TCP_CONNECTOR_LIMIT,  # 300개 전체 연결
+            limit_per_host=TCP_CONNECTOR_LIMIT_PER_HOST,  # 도메인당 최대 20개 연결
             ttl_dns_cache=300,
             use_dns_cache=True,
             keepalive_timeout=60,
@@ -71,7 +88,7 @@ class PoliteCrawler:
 
         self.session = aiohttp.ClientSession(
             connector=connector,
-            timeout=aiohttp.ClientTimeout(total=30),
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),  # 10초로 감소
             headers={
                 'User-Agent': self.user_agent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
