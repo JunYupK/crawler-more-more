@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: crawler
+  labels:
+    app: postgres
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+      name: postgres
+  selector:
+    app: postgres
+  clusterIP: None  # Headless service for StatefulSet
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: crawler
+spec:
+  serviceName: postgres-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: crawler-secrets
+              key: POSTGRES_PASSWORD
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        - name: init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - postgres
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - postgres
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+      volumes:
+      - name: init-scripts
+        configMap:
+          name: postgres-init-scripts
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: standard  # Change to your storage class
+      resources:
+        requests:
+          storage: 20Gi
+
+---
+# ConfigMap for init.sql
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: crawler
+data:
+  init.sql: |
+    -- 크롤링 페이지 데이터를 저장할 테이블
+    CREATE TABLE IF NOT EXISTS crawled_pages (
+        id SERIAL PRIMARY KEY,
+        url TEXT NOT NULL UNIQUE,
+        domain VARCHAR(255) NOT NULL,
+        title TEXT,
+        content_text TEXT,
+        metadata JSONB DEFAULT '{}',
+        crawled_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 도메인별 검색을 위한 인덱스
+    CREATE INDEX IF NOT EXISTS idx_crawled_pages_domain ON crawled_pages(domain);
+
+    -- 크롤링 시간별 검색을 위한 인덱스
+    CREATE INDEX IF NOT EXISTS idx_crawled_pages_crawled_at ON crawled_pages(crawled_at);
+
+    -- 도메인과 크롤링 시간 조합 인덱스
+    CREATE INDEX IF NOT EXISTS idx_crawled_pages_domain_crawled_at ON crawled_pages(domain, crawled_at);
+
+    -- JSONB 메타데이터 검색을 위한 GIN 인덱스
+    CREATE INDEX IF NOT EXISTS idx_crawled_pages_metadata ON crawled_pages USING GIN(metadata);

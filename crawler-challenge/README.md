@@ -1,3 +1,141 @@
+## 🚢 Phase 8: Kubernetes 배포 - 무한 확장 가능한 크롤러 (2025-11-13)
+
+**K8s 기반 자동 스케일링 및 분산 크롤링 아키텍처 구축**
+
+### 🎯 K8s 도입 목표
+
+단일 서버의 한계를 넘어 **무한 확장 가능한** 크롤러 시스템 구축:
+- ✅ 큐 길이에 따른 **자동 스케일링** (KEDA)
+- ✅ 수평 확장으로 **처리량 무제한 증가**
+- ✅ 고가용성 및 장애 복구
+- ✅ 리소스 최적화로 **비용 절감**
+
+### 🏗️ K8s 아키텍처
+
+```
+┌──────────────────────────────────────────────────┐
+│            Kubernetes Cluster                     │
+│                                                   │
+│  ┌─────────────────────────────────────────────┐ │
+│  │  Crawler Workers (Auto-scaled: 1-20 pods)   │ │
+│  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌───────┐│ │
+│  │  │Worker 1│ │Worker 2│ │Worker 3│ │ ...   ││ │
+│  │  │16 cores│ │16 cores│ │16 cores│ │       ││ │
+│  │  └────────┘ └────────┘ └────────┘ └───────┘│ │
+│  └──────────────────┬───────────────────────────┘ │
+│                     │                             │
+│     ┌───────────────▼────────┬──────────────────┐ │
+│     │ Redis StatefulSet      │ PostgreSQL       │ │
+│     │ (Queue Management)     │ StatefulSet      │ │
+│     │ - Priority Queues      │ (Crawled Data)   │ │
+│     │ - KEDA Monitoring      │ - 20GB Storage   │ │
+│     └────────────────────────┴──────────────────┘ │
+└──────────────────────────────────────────────────┘
+```
+
+### 📦 K8s 구성 요소
+
+| 컴포넌트 | 타입 | 리소스 | 스케일링 |
+|---------|------|--------|----------|
+| **Crawler Workers** | Deployment | 2-4 CPU, 4-8GB | KEDA (큐 기반) |
+| **Redis** | StatefulSet | 250m-1 CPU, 512MB-2GB | 수동 |
+| **PostgreSQL** | StatefulSet | 500m-2 CPU, 1-4GB | 수동 |
+
+### 🎚️ KEDA 자동 스케일링
+
+**큐 길이 기반 스케일링 전략:**
+
+```yaml
+큐 > 500 items  → 워커 Pod 20개로 스케일 아웃
+큐 > 100 items  → 워커 Pod 10개로 스케일 아웃
+큐 < 50 items   → 워커 Pod 2개로 스케일 인
+큐 = 0 items    → 워커 Pod 1개 (최소)
+```
+
+**예상 효과:**
+- 💰 **비용 절감**: 유휴 시간 80% 리소스 감소
+- 🚀 **버스트 처리**: 대량 URL 투입 시 즉시 확장
+- ⚖️ **자동 균형**: 워크로드에 따라 자동 조정
+
+### 📊 성능 예측
+
+| 구성 | 워커 Pods | 총 CPU Cores | 예상 처리량 | 비용 효율 |
+|------|----------|--------------|------------|----------|
+| 최소 (유휴) | 1 | 16 | 10-15 pages/sec | ⭐⭐⭐⭐⭐ |
+| 중간 (일반) | 5 | 80 | 50-75 pages/sec | ⭐⭐⭐⭐ |
+| 최대 (피크) | 20 | 320 | **200-300 pages/sec** | ⭐⭐⭐ |
+
+### 🚀 빠른 시작
+
+```bash
+# 1. Docker 이미지 빌드
+cd crawler-challenge
+docker build -t crawler-worker:latest .
+
+# 2. K8s 배포
+kubectl apply -f k8s/base/namespace.yaml
+kubectl apply -f k8s/base/secret.yaml
+kubectl apply -f k8s/base/configmap.yaml
+kubectl apply -f k8s/base/postgres-statefulset.yaml
+kubectl apply -f k8s/base/redis-statefulset.yaml
+kubectl apply -f k8s/base/crawler-deployment.yaml
+
+# 3. KEDA 자동 스케일링 활성화
+kubectl apply -f k8s/autoscaling/keda-scaledobject.yaml
+
+# 4. 모니터링
+kubectl get pods -n crawler -w
+kubectl top pods -n crawler
+```
+
+### 📁 K8s 구조
+
+```
+k8s/
+├── base/
+│   ├── namespace.yaml              # Namespace 생성
+│   ├── configmap.yaml             # 크롤러 설정 (환경 변수)
+│   ├── secret.yaml                # DB 비밀번호
+│   ├── postgres-statefulset.yaml  # PostgreSQL + init.sql
+│   ├── redis-statefulset.yaml     # Redis + 영구 저장
+│   └── crawler-deployment.yaml    # 크롤러 워커
+├── autoscaling/
+│   └── keda-scaledobject.yaml    # KEDA 자동 스케일링
+└── DEPLOY.md                      # 배포 가이드
+```
+
+### 🎯 주요 기능
+
+1. **자동 스케일링**
+   - KEDA: Redis 큐 길이 모니터링
+   - HPA: CPU/메모리 기반 스케일링 (백업)
+
+2. **고가용성**
+   - StatefulSet으로 데이터 영속성 보장
+   - PersistentVolume으로 데이터 보호
+   - Liveness/Readiness Probe로 자동 복구
+
+3. **보안**
+   - Secret으로 비밀번호 관리
+   - Non-root 컨테이너 실행
+   - Network Policy 지원 (추가 가능)
+
+4. **모니터링**
+   - 리소스 사용량 추적
+   - 로그 집중화
+   - Health check 자동화
+
+### 💡 다음 단계
+
+- [ ] Prometheus + Grafana 모니터링 대시보드
+- [ ] 멀티 클러스터 지오 분산 크롤링
+- [ ] CI/CD 파이프라인 (GitOps)
+- [ ] Cost Optimization (Spot Instances)
+
+**상세 배포 가이드**: `k8s/DEPLOY.md` 참조
+
+---
+
 ## ⚡ Phase 7: 공격적 최적화 - 동시성 극대화 (2025-11-13)
 
 **병목 지점 분석 및 공격적 최적화를 통한 처리량 극대화**

@@ -1,0 +1,51 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Test files
+test_*.py
+*_test.py
+
+# Documentation
+*.md
+docs/
+
+# Git
+.git/
+.gitignore
+
+# K8s
+k8s/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Visualizations
+visualizations/
+
+# Large data files (except necessary ones)
+*.csv
+*.zip
+
+# Keep only essential data
+!data/tranco_top_500_urls.txt
+!data/.tranco_cache/
