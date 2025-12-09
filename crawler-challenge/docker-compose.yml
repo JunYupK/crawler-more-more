@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # Crawler Services
+  crawler-master:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: crawler-master
+    command: python runners/sharded_master.py --count 10000 --workers 4
+    environment:
+      - REDIS_HOST=host.docker.internal
+      - POSTGRES_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    restart: always
+
+  crawler-worker-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: crawler-worker-1
+    command: python runners/sharded_worker.py --worker-id 1
+    environment:
+      - REDIS_HOST=host.docker.internal
+      - POSTGRES_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - crawler-master
+    restart: always
+
+  crawler-worker-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: crawler-worker-2
+    command: python runners/sharded_worker.py --worker-id 2
+    environment:
+      - REDIS_HOST=host.docker.internal
+      - POSTGRES_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - crawler-master
+    restart: always

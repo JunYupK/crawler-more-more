@@ -33,10 +33,14 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 
 # Copy application code
-COPY *.py ./
+# Copy application code
+COPY src/ ./src/
+COPY runners/ ./runners/
 COPY config/ ./config/
-COPY monitoring/ ./monitoring/
 COPY data/ ./data/
+
+# Set Python path so src modules can be imported
+ENV PYTHONPATH=/app
 
 # Create non-root user for security
 RUN useradd -m -u 1000 crawler && \
@@ -49,4 +53,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python3 -c "import redis; r = redis.Redis(host='${REDIS_HOST:-redis-service}', port=int('${REDIS_PORT:-6379}')); r.ping()" || exit 1
 
 # Default command
-CMD ["python3", "multithreaded_crawler.py", "--count", "10000", "--workers", "16", "--batch-size", "100"]
+# Default command
+CMD ["python3", "runners/sharded_master.py"]
