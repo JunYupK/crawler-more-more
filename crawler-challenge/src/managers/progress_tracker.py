@@ -2,6 +2,7 @@ import redis
 import json
 import time
 import hashlib
+import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import logging
@@ -11,7 +12,10 @@ logger = logging.getLogger(__name__)
 class ProgressTracker:
     """Redis를 사용한 진행 상황 추적 시스템"""
 
-    def __init__(self, redis_host="localhost", redis_port=6379, redis_db=0):
+    def __init__(self, redis_host=None, redis_port=6379, redis_db=0):
+        if redis_host is None:
+            redis_host = os.getenv('REDIS_HOST', 'localhost')
+            
         self.redis_client = redis.Redis(
             host=redis_host,
             port=redis_port,

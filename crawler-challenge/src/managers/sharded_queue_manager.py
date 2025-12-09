@@ -3,6 +3,7 @@
 Sharded Redis Queue Manager - Redis 샤딩을 통한 고성능 큐 관리
 """
 
+import os
 import redis
 import json
 import time
@@ -30,11 +31,12 @@ class ShardedRedisQueueManager:
             ]
         """
         if shard_configs is None:
+            redis_host = os.getenv('REDIS_HOST', 'localhost')
             # 기본 단일 Redis 인스턴스를 3개 DB로 샤딩
             shard_configs = [
-                {'host': 'localhost', 'port': 6379, 'db': 1},
-                {'host': 'localhost', 'port': 6379, 'db': 2},
-                {'host': 'localhost', 'port': 6379, 'db': 3}
+                {'host': redis_host, 'port': 6379, 'db': 1},
+                {'host': redis_host, 'port': 6379, 'db': 2},
+                {'host': redis_host, 'port': 6379, 'db': 3}
             ]
 
         self.shard_configs = shard_configs
