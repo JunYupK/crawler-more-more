@@ -1,0 +1,183 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+
+        # Get previous tag
+        PREV_TAG=$(git describe --tags --abbrev=0 ${VERSION}^ 2>/dev/null || echo "")
+
+        if [ -z "${PREV_TAG}" ]; then
+          echo "First release - generating full changelog"
+          COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+        else
+          echo "Generating changelog from ${PREV_TAG} to ${VERSION}"
+          COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+        fi
+
+        # Categorize commits
+        FEATURES=$(echo "${COMMITS}" | grep -E "^- (feat|feature)" || echo "")
+        FIXES=$(echo "${COMMITS}" | grep -E "^- fix" || echo "")
+        DOCS=$(echo "${COMMITS}" | grep -E "^- docs" || echo "")
+        CHORES=$(echo "${COMMITS}" | grep -E "^- (chore|refactor|perf|ci|build)" || echo "")
+
+        # Build changelog
+        {
+          echo "## 🚀 What's New in ${VERSION}"
+          echo ""
+
+          if [ -n "${FEATURES}" ]; then
+            echo "### ✨ Features"
+            echo "${FEATURES}"
+            echo ""
+          fi
+
+          if [ -n "${FIXES}" ]; then
+            echo "### 🐛 Bug Fixes"
+            echo "${FIXES}"
+            echo ""
+          fi
+
+          if [ -n "${DOCS}" ]; then
+            echo "### 📚 Documentation"
+            echo "${DOCS}"
+            echo ""
+          fi
+
+          if [ -n "${CHORES}" ]; then
+            echo "### 🔧 Improvements"
+            echo "${CHORES}"
+            echo ""
+          fi
+
+          echo "---"
+          echo ""
+          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${VERSION}"
+        } > changelog.md
+
+        cat changelog.md
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.get_version.outputs.version }}
+        name: Release ${{ steps.get_version.outputs.version }}
+        body_path: changelog.md
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-release-assets:
+    name: Build Release Assets
+    runs-on: ubuntu-latest
+    needs: create-release
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create release archives
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+
+        # Create K8s manifests archive
+        mkdir -p release-assets
+        tar czf release-assets/k8s-manifests-${VERSION}.tar.gz -C crawler-challenge k8s/
+
+        # Create source archive (without .git)
+        tar czf release-assets/crawler-source-${VERSION}.tar.gz \
+          --exclude='.git' \
+          --exclude='__pycache__' \
+          --exclude='*.pyc' \
+          --exclude='venv' \
+          --exclude='data/*.csv' \
+          crawler-challenge/
+
+        # Generate checksums
+        cd release-assets
+        sha256sum * > checksums.txt
+        cat checksums.txt
+
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.get_version.outputs.version }}
+        files: |
+          release-assets/*.tar.gz
+          release-assets/checksums.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-release:
+    name: Notify Release
+    runs-on: ubuntu-latest
+    needs: [create-release, build-release-assets]
+
+    steps:
+    - name: Get version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create success summary
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+
+        echo "# 🎉 Release ${VERSION} Published!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Release Information" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Release URL**: https://github.com/${{ github.repository }}/releases/tag/${VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Docker Image**: ghcr.io/${{ github.repository }}/crawler:${VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+        echo "1. Docker image is automatically built and pushed" >> $GITHUB_STEP_SUMMARY
+        echo "2. Update production K8s cluster with new version" >> $GITHUB_STEP_SUMMARY
+        echo "3. Monitor deployment via Grafana dashboards" >> $GITHUB_STEP_SUMMARY

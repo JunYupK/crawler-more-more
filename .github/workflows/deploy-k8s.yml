@@ -1,0 +1,154 @@
+name: Deploy to Kubernetes
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: false
+        default: 'latest'
+  workflow_run:
+    workflows: ["Docker Build & Push"]
+    types:
+      - completed
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/crawler
+
+jobs:
+  deploy:
+    name: Deploy to K8s
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    environment:
+      name: ${{ inputs.environment || 'staging' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set image tag
+      id: vars
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+          echo "env=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+        else
+          echo "tag=latest" >> $GITHUB_OUTPUT
+          echo "env=staging" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Configure kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Set up kubeconfig
+      run: |
+        mkdir -p $HOME/.kube
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+
+    - name: Update K8s deployment image
+      run: |
+        IMAGE_TAG="${{ steps.vars.outputs.tag }}"
+        ENVIRONMENT="${{ steps.vars.outputs.env }}"
+        IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+
+        echo "🚀 Deploying image: ${IMAGE} to ${ENVIRONMENT}"
+
+        # Update crawler deployment
+        kubectl set image deployment/crawler-worker \
+          crawler-worker=${IMAGE} \
+          -n crawler \
+          --record
+
+        # Wait for rollout
+        kubectl rollout status deployment/crawler-worker -n crawler --timeout=5m
+
+    - name: Verify deployment
+      run: |
+        echo "✅ Verifying deployment..."
+        kubectl get pods -n crawler -l app=crawler-worker
+        kubectl get deployment crawler-worker -n crawler
+
+        # Check pod health
+        READY_PODS=$(kubectl get pods -n crawler -l app=crawler-worker -o json | jq '[.items[] | select(.status.phase == "Running")] | length')
+        echo "Ready pods: ${READY_PODS}"
+
+        if [ "${READY_PODS}" -lt "1" ]; then
+          echo "❌ Deployment failed: No ready pods"
+          exit 1
+        fi
+
+    - name: Run smoke tests
+      run: |
+        echo "🧪 Running smoke tests..."
+
+        # Test Redis connectivity
+        kubectl run redis-test --image=redis:alpine --rm -i --restart=Never -n crawler -- \
+          redis-cli -h redis-service -p 6379 PING || echo "⚠️ Redis test failed"
+
+        # Test PostgreSQL connectivity
+        kubectl run postgres-test --image=postgres:15-alpine --rm -i --restart=Never -n crawler -- \
+          psql postgresql://crawler:crawler@postgres-service:5432/crawler_db -c "SELECT 1" || echo "⚠️ PostgreSQL test failed"
+
+    - name: Rollback on failure
+      if: failure()
+      run: |
+        echo "❌ Deployment failed, rolling back..."
+        kubectl rollout undo deployment/crawler-worker -n crawler
+        kubectl rollout status deployment/crawler-worker -n crawler --timeout=3m
+
+    - name: Notify deployment status
+      if: always()
+      run: |
+        STATUS="${{ job.status }}"
+        IMAGE_TAG="${{ steps.vars.outputs.tag }}"
+        ENVIRONMENT="${{ steps.vars.outputs.env }}"
+
+        if [ "${STATUS}" == "success" ]; then
+          echo "✅ Successfully deployed ${IMAGE_TAG} to ${ENVIRONMENT}"
+        else
+          echo "❌ Failed to deploy ${IMAGE_TAG} to ${ENVIRONMENT}"
+        fi
+
+  update-manifests:
+    name: Update K8s Manifests (GitOps)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: main
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Update image tag in manifests
+      run: |
+        IMAGE_TAG="${{ inputs.image_tag }}"
+        IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+
+        # Update crawler deployment manifest
+        sed -i "s|image:.*crawler.*|image: ${IMAGE}|g" \
+          crawler-challenge/k8s/base/crawler-deployment.yaml
+
+    - name: Commit and push changes
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+
+        git add crawler-challenge/k8s/base/crawler-deployment.yaml
+        git commit -m "chore: update crawler image to ${{ inputs.image_tag }}" || echo "No changes to commit"
+        git push

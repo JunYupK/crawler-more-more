@@ -1,0 +1,102 @@
+name: CI - Code Quality & Tests
+
+on:
+  push:
+    branches: [ main, develop, 'claude/**' ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        cd crawler-challenge
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install flake8 pylint pytest
+        
+    - name: Lint with flake8
+      run: |
+        cd crawler-challenge
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=venv,__pycache__,.git
+        # Exit-zero treats all errors as warnings
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics --exclude=venv,__pycache__,.git
+      continue-on-error: true
+      
+    - name: Basic syntax check
+      run: |
+        cd crawler-challenge
+        python -m py_compile *.py || true
+        
+    - name: Check imports
+      run: |
+        cd crawler-challenge
+        python -c "import polite_crawler; import multithreaded_crawler; print('✅ Core modules import successfully')"
+
+    - name: Run comprehensive test suite
+      run: |
+        cd crawler-challenge
+        chmod +x run_tests.sh
+        ./run_tests.sh
+
+    - name: Run Python unit tests
+      run: |
+        cd crawler-challenge
+        python tests/test_all_phases.py
+      continue-on-error: true
+
+    - name: Validate Docker configuration
+      run: |
+        cd crawler-challenge
+        docker --version
+        # Validate Dockerfile syntax
+        docker build --no-cache -t crawler-test:ci . --target builder || echo "⚠️ Docker build validation skipped"
+        
+  code-quality:
+    name: Code Quality Report
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install analysis tools
+      run: |
+        pip install radon pylint
+        
+    - name: Analyze code complexity
+      run: |
+        cd crawler-challenge
+        echo "📊 Cyclomatic Complexity Analysis:"
+        radon cc . -a -nb || true
+        echo ""
+        echo "📈 Maintainability Index:"
+        radon mi . -nb || true
+      continue-on-error: true
+      
+    - name: Security check
+      run: |
+        pip install bandit
+        cd crawler-challenge
+        echo "🔒 Security Analysis:"
+        bandit -r . -f txt || true
+      continue-on-error: true

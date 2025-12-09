@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crawler-worker
+  namespace: crawler
+  labels:
+    app: crawler-worker
+spec:
+  replicas: 3  # Initial replicas, KEDA will scale this
+  selector:
+    matchLabels:
+      app: crawler-worker
+  template:
+    metadata:
+      labels:
+        app: crawler-worker
+    spec:
+      containers:
+      - name: crawler
+        image: crawler-worker:latest  # Build with Dockerfile
+        imagePullPolicy: IfNotPresent
+        command:
+          - python3
+          - multithreaded_crawler.py
+          - --count
+          - "10000"
+          - --workers
+          - "$(WORKER_THREADS)"
+          - --batch-size
+          - "$(BATCH_SIZE)"
+        env:
+        # Import all config from ConfigMap
+        - name: TARGET_PAGES_PER_SECOND
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: TARGET_PAGES_PER_SECOND
+        - name: MAX_CONCURRENT_REQUESTS
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: MAX_CONCURRENT_REQUESTS
+        - name: REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: REQUEST_TIMEOUT
+        - name: GLOBAL_SEMAPHORE_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: GLOBAL_SEMAPHORE_LIMIT
+        - name: TCP_CONNECTOR_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: TCP_CONNECTOR_LIMIT
+        - name: TCP_CONNECTOR_LIMIT_PER_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: TCP_CONNECTOR_LIMIT_PER_HOST
+        - name: DEFAULT_CRAWL_DELAY
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: DEFAULT_CRAWL_DELAY
+        - name: WORKER_THREADS
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: WORKER_THREADS
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: BATCH_SIZE
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: REDIS_PORT
+        - name: POSTGRES_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: POSTGRES_HOST
+        - name: POSTGRES_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: POSTGRES_PORT
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: crawler-secrets
+              key: POSTGRES_PASSWORD
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: crawler-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        livenessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - "import redis; r = redis.Redis(host='redis-service', port=6379); r.ping()"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - "import redis; r = redis.Redis(host='redis-service', port=6379); r.ping()"
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+      restartPolicy: Always

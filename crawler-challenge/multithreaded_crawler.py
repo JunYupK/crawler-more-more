@@ -21,6 +21,13 @@ from database import DatabaseManager
 from progress_tracker import ProgressTracker
 from monitoring.metrics import MetricsMonitor
 
+# Config import 추가
+try:
+    from config.settings import WORKER_THREADS, BATCH_SIZE
+except ImportError:
+    WORKER_THREADS = 16
+    BATCH_SIZE = 100
+
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
@@ -34,11 +41,11 @@ logger = logging.getLogger(__name__)
 class MultithreadedCrawler:
     """멀티스레딩을 활용한 대규모 크롤러"""
 
-    def __init__(self, initial_url_count: int = 1000, worker_threads: int = 4):
+    def __init__(self, initial_url_count: int = 1000, worker_threads: int = None):
         self.initial_url_count = initial_url_count
-        self.worker_threads = worker_threads
+        self.worker_threads = worker_threads if worker_threads is not None else WORKER_THREADS  # 기본 16개
         self.should_stop = False
-        self.batch_size = 25  # 스레드당 배치 크기 축소
+        self.batch_size = BATCH_SIZE  # 공격적 배치 크기 100
 
         # 컴포넌트들
         self.tranco_manager: Optional[TrancoManager] = None
@@ -462,10 +469,10 @@ async def main():
     parser = argparse.ArgumentParser(description='Multithreaded Enterprise Crawler')
     parser.add_argument('--count', type=int, default=1000,
                        help='크롤링할 URL 개수 (기본: 1000)')
-    parser.add_argument('--batch-size', type=int, default=25,
-                       help='워커별 배치 크기 (기본: 25)')
-    parser.add_argument('--workers', type=int, default=4,
-                       help='워커 스레드 수 (기본: 4)')
+    parser.add_argument('--batch-size', type=int, default=BATCH_SIZE,
+                       help=f'워커별 배치 크기 (기본: {BATCH_SIZE})')
+    parser.add_argument('--workers', type=int, default=WORKER_THREADS,
+                       help=f'워커 스레드 수 (기본: {WORKER_THREADS})')
 
     args = parser.parse_args()
 
