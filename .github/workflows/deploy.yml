@@ -1,0 +1,32 @@
+name: Deploy Crawler
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Deploy with Docker Compose
+        working-directory: ./crawler-challenge
+        run: |
+          echo "🚀 배포 시작: 기존 컨테이너 중지 및 최신 코드 빌드"
+          
+          # 1. 최신 코드로 이미지 다시 빌드 (캐시 활용)
+          docker compose build
+          
+          # 2. 컨테이너 재시작 (변경된 부분만 감지해서 교체함)
+          # -d: 백그라운드 실행
+          docker compose up -d
+          
+          # 3. 불필요한 이미지 정리 (용량 확보)
+          docker image prune -f
+
+      - name: Health Check (생존 확인)
+        working-directory: ./crawler-challenge
+        run: |
+          sleep 5
+          docker compose ps
