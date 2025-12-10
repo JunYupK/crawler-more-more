@@ -30,6 +30,19 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter
+    container_name: crawler-postgres-exporter
+    ports:
+      - "9187:9187" # Prometheus가 긁어갈 포트
+    environment:
+      # DB 접속 정보 (postgres 컨테이너를 바라봄)
+      DATA_SOURCE_URI: "postgres://postgres:postgres@postgres:5432/crawler_db?sslmode=disable"
+      DATA_SOURCE_USER: "postgres"
+      DATA_SOURCE_PASS: "postgres"
+    depends_on:
+      - postgres
+    restart: always
 
   # 2. Crawler Services
   crawler-master:
