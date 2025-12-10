@@ -10,7 +10,7 @@ import signal
 import argparse
 from datetime import datetime
 from typing import Optional
-
+from src.monitoring.metrics import MetricsManager
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -35,7 +35,6 @@ def setup_logging():
 
 class ShardedCrawlerMaster:
     """샤딩된 분산 크롤러 마스터 노드"""
-
     def __init__(self, worker_count: int = 4):
         self.worker_count = worker_count
         self.should_stop = False
@@ -52,13 +51,16 @@ class ShardedCrawlerMaster:
         # 컴포넌트들
         self.tranco_manager: Optional[TrancoManager] = None
         self.progress_tracker: Optional[ProgressTracker] = None
-
+        
+        # [Metric] 2. MetricsManager 초기화 (포트 8000)
+        self.metrics = MetricsManager(port=8000)
         # 통계
         self.start_time = datetime.now()
 
         # 신호 핸들러
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
 
     def _signal_handler(self, signum, frame):
         """종료 신호 처리"""
@@ -69,6 +71,8 @@ class ShardedCrawlerMaster:
         """마스터 초기화"""
         try:
             logging.info("=== 샤딩된 분산 크롤러 마스터 초기화 시작 ===")
+            # [Metric] 3. 메트릭 서버 시작
+            self.metrics.start_server()
 
             # 1. Tranco Manager
             logging.info("1. Tranco Manager 초기화...")
@@ -109,6 +113,10 @@ class ShardedCrawlerMaster:
             if not self.queue_manager.initialize_queues(urls):
                 logging.error("샤딩된 큐 초기화 실패")
                 return False
+            # 통계 출력
+            queue_stats = self.queue_manager.get_queue_stats()
+            # [Metric] 4. 초기 상태 반영
+            self.metrics.update_queue_stats(queue_stats)
 
             # 통계 출력
             queue_stats = self.queue_manager.get_queue_stats()
@@ -144,6 +152,9 @@ class ShardedCrawlerMaster:
                 # 큐 상태 확인
                 queue_stats = self.queue_manager.get_queue_stats()
 
+                # [Metric] 5. 실시간 통계 업데이트 (중요!)
+                self.metrics.update_queue_stats(queue_stats)
+
                 # 5분마다 리포트
                 if (datetime.now() - last_report).total_seconds() > 300:
                     logging.info("📊 샤딩 마스터 리포트:")
@@ -152,6 +163,7 @@ class ShardedCrawlerMaster:
                     logging.info(f"  - 처리 중: {queue_stats.get('processing', 0)}개")
                     logging.info(f"  - 실패: {queue_stats.get('failed', 0)}개")
                     logging.info(f"  - 완료율: {queue_stats.get('completion_rate', 0):.1%}")
+                    
 
                     # 샤드별 상세 정보
                     for shard in queue_stats.get('shard_details', []):
@@ -209,7 +221,7 @@ async def main():
     parser.add_argument('--workers', type=int, default=4, help='워커 수')
     
     args = parser.parse_args()
-    
+
     setup_logging()
     
     print(f"샤딩된 분산 크롤러 마스터 시작 (워커 {args.workers}개, URL {args.count}개)")

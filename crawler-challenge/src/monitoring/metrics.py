@@ -1,9 +1,52 @@
-import asyncio
 import time
+import asyncio
 import psutil
 from typing import Optional, List, Dict
+from prometheus_client import start_http_server, Gauge, Counter
 
+# --- [추가됨] Prometheus Metrics Manager ---
+class MetricsManager:
+    def __init__(self, port=8000):
+        self.port = port
+        self.server_started = False
+        
+        # 1. 큐 상태 (Gauge: Redis 상태를 그대로 반영하므로 Gauge 사용)
+        self.queue_pending = Gauge('crawler_queue_pending', 'Total URLs waiting in queue')
+        self.queue_processing = Gauge('crawler_queue_processing', 'Total URLs currently being processed')
+        
+        # 2. 작업 결과 (Gauge: Master가 Redis에서 누적된 값을 가져오므로 Gauge로 Set)
+        # (Counter는 증가만 가능하지만, Redis 값을 덮어쓰기 위해 Gauge를 Counter처럼 활용)
+        self.tasks_completed = Gauge('crawler_tasks_completed_total', 'Total successfully completed tasks')
+        self.tasks_failed = Gauge('crawler_tasks_failed_total', 'Total failed tasks')
 
+        # 3. 샤드별 상태 (Labeled Gauge)
+        self.shard_pending = Gauge('crawler_shard_pending', 'Pending tasks per shard', ['shard_id'])
+
+    def start_server(self):
+        """Prometheus Exporter 서버 시작"""
+        if not self.server_started:
+            try:
+                start_http_server(self.port)
+                self.server_started = True
+                print(f"[Metrics] Prometheus server started on port {self.port}")
+            except Exception as e:
+                print(f"[Metrics] Failed to start server: {e}")
+
+    def update_queue_stats(self, stats: dict):
+        """Master가 조회한 queue_stats 딕셔너리를 받아 메트릭 갱신"""
+        # 전체 통계
+        self.queue_pending.set(stats.get('total_pending', 0))
+        self.queue_processing.set(stats.get('processing', 0))
+        self.tasks_completed.set(stats.get('completed', 0))
+        self.tasks_failed.set(stats.get('failed', 0))
+
+        # 샤드별 상세 통계
+        if 'shard_details' in stats:
+            for shard in stats['shard_details']:
+                shard_id = str(shard.get('shard_id', 'unknown'))
+                pending = shard.get('total_pending', 0)
+                self.shard_pending.labels(shard_id=shard_id).set(pending)
+                
 class MetricsMonitor:
     def __init__(self):
         self.start_time = time.time()

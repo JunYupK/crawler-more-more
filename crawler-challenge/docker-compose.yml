@@ -33,6 +33,8 @@ services:
 
   # 2. Crawler Services
   crawler-master:
+    ports:
+      - "8000:8000"
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -52,7 +54,7 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy # DB가 쿼리 받을 준비가 되면 실행
-    restart: always
+    restart: on-failure
 
   crawler-worker-1:
     build:
