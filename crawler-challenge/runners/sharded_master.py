@@ -191,6 +191,7 @@ class ShardedCrawlerMaster:
 
             except Exception as e:
                 logging.error(f"샤딩 모니터링 오류: {e}")
+                self.metrics.inc_error(error_type='monitor_loop_error')
                 await asyncio.sleep(30)
 
     async def run(self, url_count: int = 400):
