@@ -144,6 +144,13 @@ class DatabaseManager:
             logger.warning(f"텍스트 추출 실패: {e}")
             content_text = ""
 
+        if title:
+            title = title.replace('\x00', '')
+        if content_text:
+            content_text = content_text.replace('\x00', '')
+        if metadata:
+            metadata = metadata.replace('\x00', '')
+
         self.batch_buffer.append({
             'url': url,
             'domain': domain,
@@ -183,9 +190,13 @@ class DatabaseManager:
                 logger.info(f"{len(self.batch_buffer)}개 레코드 배치 저장 완료")
                 self.batch_buffer.clear()
         except psycopg2.Error as e:
-            logger.error(f"배치 저장 실패: {e}")
+            logger.error(f"배치 저장 실패 (데이터 유실 가능성 있음): {e}")
             conn.rollback()
+            # 🚨 중요: 에러가 나도 버퍼를 비워야 다음 데이터를 받을 수 있음!
+            # (운영 환경에서는 여기서 실패한 데이터를 별도 파일로 빼는 게 좋음)
         finally:
+            # 성공하든 실패하든 버퍼는 비워야 무한 루프를 방지함
+            self.batch_buffer.clear()
             self.release_connection(conn)
 
     def get_crawled_count(self) -> int:
