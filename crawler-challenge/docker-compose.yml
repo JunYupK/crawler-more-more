@@ -36,10 +36,7 @@ services:
     ports:
       - "9187:9187" # Prometheus가 긁어갈 포트
     environment:
-      # DB 접속 정보 (postgres 컨테이너를 바라봄)
-      DATA_SOURCE_URI: "postgres://postgres:postgres@postgres:5432/crawler_db?sslmode=disable"
-      DATA_SOURCE_USER: "postgres"
-      DATA_SOURCE_PASS: "postgres"
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/crawler_db?sslmode=disable"
     depends_on:
       - postgres
     restart: always
