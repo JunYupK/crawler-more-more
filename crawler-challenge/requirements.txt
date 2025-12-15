@@ -11,3 +11,4 @@ flask
 flask-socketio
 prometheus-client==0.17.1
 redis==5.0.0
+pytest-json-report
