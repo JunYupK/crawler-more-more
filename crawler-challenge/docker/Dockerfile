@@ -52,6 +52,9 @@ USER crawler
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python3 -c "import redis; r = redis.Redis(host='${REDIS_HOST:-redis-service}', port=int('${REDIS_PORT:-6379}')); r.ping()" || exit 1
 
-# Default command
-# Default command
-CMD ["python3", "runners/sharded_master.py"]
+# Expose ports
+EXPOSE 8080
+EXPOSE 8000
+
+# Default command (API 서버 실행)
+CMD ["python3", "src/api/server.py"]
