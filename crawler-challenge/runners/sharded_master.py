@@ -8,6 +8,7 @@ import asyncio
 import logging
 import signal
 import argparse
+import subprocess
 from datetime import datetime
 from typing import Optional
 from src.monitoring.metrics import MetricsManager
@@ -185,6 +186,8 @@ class ShardedCrawlerMaster:
                     queue_stats.get('processing', 0) == 0 and
                     queue_stats.get('completed', 0) > 0):
                     logging.info("✅ 모든 샤딩된 작업 완료")
+                    # 자동 리포트 생성
+                    await self.generate_completion_report()
                     break
 
                 await asyncio.sleep(30)  # 30초마다 확인
@@ -193,6 +196,42 @@ class ShardedCrawlerMaster:
                 logging.error(f"샤딩 모니터링 오류: {e}")
                 self.metrics.inc_error(error_type='monitor_loop_error')
                 await asyncio.sleep(30)
+
+    async def generate_completion_report(self):
+        """크롤링 완료 후 AI 리포트 자동 생성"""
+        try:
+            logging.info("📊 AI 리포트 생성 시작...")
+
+            # 프로젝트 루트 경로
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+            report_script = os.path.join(project_root, 'scripts', 'generate_ai_report.py')
+
+            if not os.path.exists(report_script):
+                logging.warning(f"리포트 스크립트를 찾을 수 없습니다: {report_script}")
+                return
+
+            # 비동기로 리포트 생성 스크립트 실행
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, report_script,
+                cwd=project_root,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logging.info("✅ AI 리포트 생성 완료")
+                if stdout:
+                    logging.info(stdout.decode('utf-8', errors='ignore'))
+            else:
+                logging.warning(f"AI 리포트 생성 실패 (종료 코드: {process.returncode})")
+                if stderr:
+                    logging.warning(stderr.decode('utf-8', errors='ignore'))
+
+        except Exception as e:
+            logging.error(f"AI 리포트 생성 중 오류: {e}")
+            # 리포트 생성 실패해도 크롤링은 성공으로 처리
 
     async def run(self, url_count: int = 400):
         """샤딩 마스터 실행"""

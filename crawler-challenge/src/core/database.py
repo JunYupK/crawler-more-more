@@ -148,8 +148,9 @@ class DatabaseManager:
             title = title.replace('\x00', '')
         if content_text:
             content_text = content_text.replace('\x00', '')
+        # metadata는 dict이므로 JSON 직렬화 후 NUL 바이트 제거
         if metadata:
-            metadata = metadata.replace('\x00', '')
+            metadata = {k: (v.replace('\x00', '') if isinstance(v, str) else v) for k, v in metadata.items()}
 
         self.batch_buffer.append({
             'url': url,
@@ -164,11 +165,14 @@ class DatabaseManager:
             self.flush_batch()
 
     def flush_batch(self):
-        """배치 데이터를 DB에 저장"""
+        """배치 데이터를 DB에 저장 (실패 시 DLQ로 격리)"""
         if not self.batch_buffer:
             return
 
+        # 배치 데이터 복사 (DLQ 저장용)
+        batch_data_copy = list(self.batch_buffer)
         conn = self.get_connection()
+
         try:
             with conn.cursor() as cursor:
                 insert_query = """
@@ -188,16 +192,69 @@ class DatabaseManager:
                 psycopg2.extras.execute_values(cursor, insert_query, values, page_size=100)
                 conn.commit()
                 logger.info(f"{len(self.batch_buffer)}개 레코드 배치 저장 완료")
-                self.batch_buffer.clear()
         except psycopg2.Error as e:
-            logger.error(f"배치 저장 실패 (데이터 유실 가능성 있음): {e}")
+            logger.error(f"배치 저장 실패, DLQ로 격리 저장 시도: {e}")
             conn.rollback()
-            # 🚨 중요: 에러가 나도 버퍼를 비워야 다음 데이터를 받을 수 있음!
-            # (운영 환경에서는 여기서 실패한 데이터를 별도 파일로 빼는 게 좋음)
+            # DLQ로 실패 데이터 격리 저장
+            self.save_to_dlq(batch_data_copy, e)
+        except Exception as e:
+            logger.error(f"예상치 못한 에러 발생, DLQ로 격리 저장 시도: {e}")
+            conn.rollback()
+            self.save_to_dlq(batch_data_copy, e)
         finally:
             # 성공하든 실패하든 버퍼는 비워야 무한 루프를 방지함
             self.batch_buffer.clear()
             self.release_connection(conn)
+
+    def save_to_dlq(self, batch_data: List[Dict], error: Exception):
+        """
+        실패한 배치 데이터를 DLQ(Dead Letter Queue) 테이블에 저장
+
+        Args:
+            batch_data: 실패한 배치 데이터 리스트
+            error: 발생한 예외 객체
+        """
+        error_type = type(error).__name__
+        error_message = str(error)[:1000]  # 에러 메시지 길이 제한
+
+        conn = None
+        try:
+            conn = self.get_connection()
+            with conn.cursor() as cursor:
+                for item in batch_data:
+                    try:
+                        # raw_data를 JSON으로 직렬화 (직렬화 오류 방지를 위해 default=str 사용)
+                        raw_data_json = json.dumps(item, default=str, ensure_ascii=False)
+                        # NUL 바이트 제거
+                        raw_data_json = raw_data_json.replace('\x00', '')
+
+                        url = item.get('url', 'unknown')
+                        if url:
+                            url = url.replace('\x00', '')
+
+                        cursor.execute("""
+                            INSERT INTO crawler_dlq (url, error_message, error_type, raw_data)
+                            VALUES (%s, %s, %s, %s)
+                        """, (url, error_message, error_type, raw_data_json))
+                    except Exception as item_error:
+                        # 개별 아이템 저장 실패 시에도 계속 진행
+                        logger.warning(f"DLQ 개별 아이템 저장 실패: {item_error}")
+                        continue
+
+                conn.commit()
+                logger.warning(f"DLQ에 {len(batch_data)}개 레코드 격리 저장 완료 (error_type: {error_type})")
+        except Exception as dlq_error:
+            # DLQ 저장도 실패하면 로그만 남기고 무시 (시스템 멈춤 방지)
+            logger.critical(f"DLQ 저장 실패! 데이터 유실 발생: {dlq_error}")
+            logger.critical(f"유실된 URL 목록: {[item.get('url', 'unknown') for item in batch_data[:10]]}...")
+            if conn:
+                try:
+                    conn.rollback()
+                except:
+                    pass
+        finally:
+            if conn:
+                self.release_connection(conn)
 
     def get_crawled_count(self) -> int:
         """크롤링된 페이지 수 조회"""

@@ -1,0 +1,23 @@
+# Environment variables (API keys, secrets)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Reports (generated)
+docs/reports/*.md
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage

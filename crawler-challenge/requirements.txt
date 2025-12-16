@@ -12,3 +12,8 @@ flask-socketio
 prometheus-client==0.17.1
 redis==5.0.0
 pytest-json-report
+
+# AI Report Generation
+google-generativeai
+prometheus-api-client
+python-dotenv
