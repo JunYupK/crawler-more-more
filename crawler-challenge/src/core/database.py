@@ -1,18 +1,9 @@
 import psycopg2
 import psycopg2.extras
-from psycopg2 import Error
-from urllib.parse import urlparse
-import json
-from typing import List, Dict, Any
-import logging
-
-logger = logging.getLogger(__name__)
-
-import psycopg2
-import psycopg2.extras
 from psycopg2 import pool
 from urllib.parse import urlparse
 import json
+import time
 from typing import List, Dict, Any
 import logging
 
@@ -40,8 +31,13 @@ class DatabaseManager:
                 logger.error(f"DB 커넥션 풀 생성 실패: {e}")
                 raise
         
-        self.batch_size = 1000
+        # 배치 설정 (메모리 최적화)
+        # 기존: 1000개 모아서 bulk insert → 메모리: 8 × 1000 × 20KB = 160MB
+        # 변경: 20개 + 5초 flush → 메모리: 8 × 20 × 20KB = 3.2MB (50배 감소)
+        self.batch_size = 20
+        self.flush_timeout = 5  # 초
         self.batch_buffer = []
+        self.last_flush_time = time.time()
 
     def get_connection(self):
         """커넥션 풀에서 커넥션 가져오기"""
@@ -160,8 +156,16 @@ class DatabaseManager:
             'metadata': json.dumps(metadata)
         })
 
-        # 배치 크기에 도달하면 자동으로 플러시
-        if len(self.batch_buffer) >= self.batch_size:
+        # 배치 크기 도달 OR 타임아웃 경과 시 자동 플러시
+        # - 20개 완료 시 즉시 저장
+        # - 5초 경과 시 저장 (실시간성 보장)
+        # - 크래시 시 최대 20개만 손실 (안정성 향상)
+        should_flush = (
+            len(self.batch_buffer) >= self.batch_size or
+            (time.time() - self.last_flush_time) >= self.flush_timeout
+        )
+
+        if should_flush and self.batch_buffer:
             self.flush_batch()
 
     def flush_batch(self):
@@ -204,6 +208,7 @@ class DatabaseManager:
         finally:
             # 성공하든 실패하든 버퍼는 비워야 무한 루프를 방지함
             self.batch_buffer.clear()
+            self.last_flush_time = time.time()  # flush 시간 업데이트
             self.release_connection(conn)
 
     def save_to_dlq(self, batch_data: List[Dict], error: Exception):
