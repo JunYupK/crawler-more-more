@@ -20,6 +20,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.core.polite_crawler import PoliteCrawler
 from src.core.database import DatabaseManager
 from src.managers.sharded_queue_manager import ShardedRedisQueueManager
+from src.monitoring.metrics import MetricsManager
 
 
 class CrawlErrorType(Enum):
@@ -120,12 +121,17 @@ class ShardedCrawlerWorker:
         self.queue_manager = ShardedRedisQueueManager(shard_configs)
         self.db_manager = DatabaseManager(host=postgres_host)
 
+        # Prometheus 메트릭 (워커별 포트: 8001 + worker_id)
+        metrics_port = 8001 + worker_id
+        self.metrics = MetricsManager(port=metrics_port)
+
         # 통계
         self.total_processed = 0
         self.total_successful = 0
         self.total_failed = 0
         self.start_time = datetime.now()
         self.shard_distribution = {}  # 샤드별 처리 통계
+        self.error_type_stats = {}  # 에러 타입별 통계
 
         # 신호 핸들러
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -145,6 +151,13 @@ class ShardedCrawlerWorker:
             if not self.queue_manager.test_connection():
                 logging.error("Redis 샤드 연결 실패")
                 return False
+
+            # Prometheus 메트릭 서버 시작
+            try:
+                self.metrics.start_server()
+                logging.info(f"[OK] Prometheus 메트릭 서버 시작 (port: {self.metrics.port})")
+            except Exception as e:
+                logging.warning(f"Prometheus 서버 시작 실패 (계속 진행): {e}")
 
             logging.info(f"[OK] 샤딩 워커 {self.worker_id} 초기화 완료 (랜덤 샤드 선택)")
             return True
@@ -194,6 +207,15 @@ class ShardedCrawlerWorker:
                             if shard_id not in self.shard_distribution:
                                 self.shard_distribution[shard_id] = {'success': 0, 'failed': 0}
                             self.shard_distribution[shard_id]['success'] += 1
+
+                            # Prometheus 메트릭 기록 (성공)
+                            self.metrics.record_crawl_result(self.worker_id, {
+                                'success': True,
+                                'url': result['url'],
+                                'domain': result.get('domain', urlparse(result['url']).netloc),
+                                'status_code': result.get('status'),
+                                'response_time': result.get('response_time')
+                            })
 
                         else:
                             # 실패 처리 - 에러 타입 분류
@@ -246,10 +268,18 @@ class ShardedCrawlerWorker:
                                 self.shard_distribution[shard_id] = {'success': 0, 'failed': 0}
                             self.shard_distribution[shard_id]['failed'] += 1
 
-                            # 에러 타입별 통계 (새로 추가)
-                            if not hasattr(self, 'error_type_stats'):
-                                self.error_type_stats = {}
+                            # 에러 타입별 통계
                             self.error_type_stats[error_type] = self.error_type_stats.get(error_type, 0) + 1
+
+                            # Prometheus 메트릭 기록 (실패)
+                            self.metrics.record_crawl_result(self.worker_id, {
+                                'success': False,
+                                'url': result['url'],
+                                'domain': domain,
+                                'error_type': error_type,
+                                'status_code': status_code,
+                                'response_time': result.get('response_time')
+                            })
 
                     except Exception as e:
                         logging.error(f"샤딩 워커 {self.worker_id} 결과 처리 오류: {e}")
@@ -259,6 +289,11 @@ class ShardedCrawlerWorker:
                 self.total_processed += len(results)
                 self.total_successful += successful_count
                 self.total_failed += failed_count
+
+                # Prometheus 성공률 게이지 업데이트
+                if self.total_processed > 0:
+                    success_rate = (self.total_successful / self.total_processed) * 100
+                    self.metrics.update_success_rate(self.worker_id, success_rate)
 
                 logging.info(f"샤딩 워커 {self.worker_id} 배치 완료: {successful_count}개 성공, {failed_count}개 실패")
                 return True
