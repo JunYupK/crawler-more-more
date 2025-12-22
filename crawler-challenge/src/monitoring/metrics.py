@@ -8,29 +8,74 @@ class MetricsManager:
     def __init__(self, port=8000):
         self.port = port
         self.server_started = False
-        
+
         # 1. 큐 상태 (Gauge: Redis 상태 반영)
         self.queue_pending = Gauge('crawler_queue_pending', 'Total URLs waiting in queue')
         self.queue_processing = Gauge('crawler_queue_processing', 'Total URLs currently being processed')
-        
+
         # 2. 작업 결과 (Counter로 변경 권장, 하지만 마스터가 Redis 값을 덮어쓰는 구조라면 Gauge 유지)
         self.tasks_completed = Gauge('crawler_tasks_completed_total', 'Total successfully completed tasks')
         self.tasks_failed = Gauge('crawler_tasks_failed_total', 'Total failed tasks')
 
-        # [NEW] 3. 상세 에러 카운트 (Counter + Label)
-        # 예: metrics.inc_error('connection_error')
+        # 3. 상세 에러 카운트 (Counter + Label)
         self.error_details = Counter('crawler_error_details', 'Detailed error counts by type', ['error_type'])
 
-        # [NEW] 4. 페이지 처리 시간 분포 (Histogram)
-        # 예: with metrics.measure_latency(): process_page()
+        # 4. 페이지 처리 시간 분포 (Histogram)
         self.process_latency = Histogram('crawler_process_latency_seconds', 'Time spent processing a page', buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
 
         # 5. 샤드별 상태 (Labeled Gauge)
         self.shard_pending = Gauge('crawler_shard_pending', 'Pending tasks per shard', ['shard_id'])
 
-        # [NEW] 6. 시스템 리소스 (Gauge)
+        # 6. 시스템 리소스 (Gauge)
         self.system_cpu = Gauge('crawler_system_cpu_percent', 'CPU usage percent')
         self.system_memory = Gauge('crawler_system_memory_percent', 'Memory usage percent')
+
+        # ============================================================
+        # [NEW] 크롤링 에러 모니터링 메트릭
+        # ============================================================
+
+        # 7. 워커별 에러 카운터 (에러 타입, 도메인별 분류)
+        self.crawl_errors_total = Counter(
+            'crawl_errors_total',
+            'Total crawl errors by type, worker, and domain',
+            ['worker_id', 'error_type', 'domain']
+        )
+
+        # 8. 크롤링 요청 총 카운터 (성공/실패)
+        self.crawl_requests_total = Counter(
+            'crawl_requests_total',
+            'Total crawl requests by status',
+            ['worker_id', 'status']  # status: success/failed
+        )
+
+        # 9. 응답 시간 히스토그램 (성공/실패별)
+        self.crawl_response_time_seconds = Histogram(
+            'crawl_response_time_seconds',
+            'Crawl response time distribution',
+            ['worker_id', 'success'],
+            buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]
+        )
+
+        # 10. HTTP 상태 코드 카운터
+        self.crawl_http_status_total = Counter(
+            'crawl_http_status_total',
+            'HTTP status codes by worker and domain',
+            ['worker_id', 'status_code', 'domain']
+        )
+
+        # 11. 성공률 게이지 (워커별)
+        self.crawl_success_rate = Gauge(
+            'crawl_success_rate',
+            'Current success rate percentage by worker',
+            ['worker_id']
+        )
+
+        # 12. 도메인별 실패 카운터
+        self.domain_failures_total = Counter(
+            'domain_failures_total',
+            'Total failures by domain',
+            ['domain', 'error_type']
+        )
 
     def start_server(self):
         """Prometheus Exporter 서버 시작"""
@@ -66,6 +111,73 @@ class MetricsManager:
     def inc_error(self, error_type='unknown'):
         """특정 에러 타입 카운트 증가"""
         self.error_details.labels(error_type=error_type).inc()
+
+    def record_crawl_result(self, worker_id: int, result: Dict):
+        """크롤링 결과를 Prometheus 메트릭으로 기록
+
+        Args:
+            worker_id: 워커 ID
+            result: 크롤링 결과 딕셔너리
+                - success: bool
+                - url: str
+                - domain: str (optional)
+                - error_type: str (optional, 실패 시)
+                - status_code: int (optional)
+                - response_time: float (optional)
+        """
+        worker_str = str(worker_id)
+        success = result.get('success', False)
+        domain = result.get('domain', 'unknown')
+
+        # 1. 요청 카운터 증가
+        status = 'success' if success else 'failed'
+        self.crawl_requests_total.labels(worker_id=worker_str, status=status).inc()
+
+        # 2. 응답 시간 기록
+        response_time = result.get('response_time')
+        if response_time is not None:
+            self.crawl_response_time_seconds.labels(
+                worker_id=worker_str,
+                success=str(success)
+            ).observe(response_time)
+
+        # 3. 실패 시 에러 메트릭 기록
+        if not success:
+            error_type = result.get('error_type', 'unknown')
+
+            # 에러 카운터
+            self.crawl_errors_total.labels(
+                worker_id=worker_str,
+                error_type=error_type,
+                domain=domain
+            ).inc()
+
+            # 도메인별 실패 카운터
+            self.domain_failures_total.labels(
+                domain=domain,
+                error_type=error_type
+            ).inc()
+
+            # 기존 에러 카운터도 업데이트 (하위 호환성)
+            self.error_details.labels(error_type=error_type).inc()
+
+        # 4. HTTP 상태 코드 기록
+        status_code = result.get('status_code')
+        if status_code:
+            self.crawl_http_status_total.labels(
+                worker_id=worker_str,
+                status_code=str(status_code),
+                domain=domain
+            ).inc()
+
+    def update_success_rate(self, worker_id: int, success_rate: float):
+        """워커별 성공률 업데이트
+
+        Args:
+            worker_id: 워커 ID
+            success_rate: 성공률 (0.0 ~ 100.0)
+        """
+        self.crawl_success_rate.labels(worker_id=str(worker_id)).set(success_rate)
                 
 class MetricsMonitor:
     def __init__(self):

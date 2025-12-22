@@ -8,8 +8,11 @@ import asyncio
 import logging
 import signal
 import argparse
+import time
 from datetime import datetime
 from typing import List, Dict, Optional
+from enum import Enum
+from urllib.parse import urlparse
 
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -17,6 +20,68 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.core.polite_crawler import PoliteCrawler
 from src.core.database import DatabaseManager
 from src.managers.sharded_queue_manager import ShardedRedisQueueManager
+
+
+class CrawlErrorType(Enum):
+    """크롤링 에러 타입 분류
+
+    에러 모니터링 및 분석을 위한 세분화된 에러 분류:
+    - 네트워크 에러: TIMEOUT, CONNECTION_ERROR, DNS_ERROR, SSL_ERROR
+    - HTTP 에러: HTTP_403, HTTP_404, HTTP_429, HTTP_5XX
+    - 크롤링 정책: ROBOTS_BLOCKED
+    - 기타: UNKNOWN
+    """
+    TIMEOUT = "timeout"
+    SSL_ERROR = "ssl_error"
+    CONNECTION_ERROR = "connection_error"
+    HTTP_403 = "http_403_forbidden"
+    HTTP_404 = "http_404_not_found"
+    HTTP_429 = "http_429_rate_limit"
+    HTTP_5XX = "http_5xx_server_error"
+    DNS_ERROR = "dns_error"
+    ROBOTS_BLOCKED = "robots_blocked"
+    CONTENT_ERROR = "content_error"
+    UNKNOWN = "unknown"
+
+
+def classify_crawl_error(error_message: str, status_code: int = None) -> str:
+    """에러 메시지와 상태 코드를 기반으로 에러 타입 분류
+
+    Args:
+        error_message: 에러 메시지 문자열
+        status_code: HTTP 상태 코드 (있는 경우)
+
+    Returns:
+        CrawlErrorType의 value 문자열
+    """
+    error_lower = error_message.lower() if error_message else ""
+
+    # HTTP 상태 코드 기반 분류
+    if status_code:
+        if status_code == 403:
+            return CrawlErrorType.HTTP_403.value
+        elif status_code == 404:
+            return CrawlErrorType.HTTP_404.value
+        elif status_code == 429:
+            return CrawlErrorType.HTTP_429.value
+        elif 500 <= status_code < 600:
+            return CrawlErrorType.HTTP_5XX.value
+
+    # 에러 메시지 기반 분류
+    if "timeout" in error_lower:
+        return CrawlErrorType.TIMEOUT.value
+    elif "ssl" in error_lower or "certificate" in error_lower:
+        return CrawlErrorType.SSL_ERROR.value
+    elif any(x in error_lower for x in ["connection", "connect", "refused", "reset"]):
+        return CrawlErrorType.CONNECTION_ERROR.value
+    elif any(x in error_lower for x in ["dns", "name resolution", "getaddrinfo", "nodename"]):
+        return CrawlErrorType.DNS_ERROR.value
+    elif "robots" in error_lower or "blocked" in error_lower or "불허" in error_lower:
+        return CrawlErrorType.ROBOTS_BLOCKED.value
+    elif any(x in error_lower for x in ["content", "decode", "encoding", "charset"]):
+        return CrawlErrorType.CONTENT_ERROR.value
+
+    return CrawlErrorType.UNKNOWN.value
 
 # 로깅 설정
 def setup_logging(worker_id: int):
@@ -131,15 +196,42 @@ class ShardedCrawlerWorker:
                             self.shard_distribution[shard_id]['success'] += 1
 
                         else:
-                            # 실패 처리
+                            # 실패 처리 - 에러 타입 분류
                             error_message = result.get('error', 'Unknown error')
+                            status_code = result.get('status')
+                            error_type = classify_crawl_error(error_message, status_code)
+                            domain = result.get('domain', urlparse(result['url']).netloc)
+
                             error_info = {
-                                'type': 'crawl_error',
+                                'type': error_type,
                                 'message': error_message,
-                                'recoverable': 'timeout' in error_message.lower(),
+                                'status_code': status_code,
+                                'domain': domain,
+                                'recoverable': error_type in [
+                                    CrawlErrorType.TIMEOUT.value,
+                                    CrawlErrorType.HTTP_429.value,
+                                    CrawlErrorType.HTTP_5XX.value,
+                                    CrawlErrorType.CONNECTION_ERROR.value
+                                ],
                                 'worker_id': self.worker_id,
-                                'shard_id': shard_id
+                                'shard_id': shard_id,
+                                'timestamp': datetime.now().isoformat()
                             }
+
+                            # 상세 에러 로깅
+                            logging.warning(
+                                f"\n{'='*60}\n"
+                                f"CRAWL FAILED\n"
+                                f"{'='*60}\n"
+                                f"URL:           {result['url']}\n"
+                                f"Domain:        {domain}\n"
+                                f"Error Type:    {error_type}\n"
+                                f"Error Message: {error_message}\n"
+                                f"Status Code:   {status_code}\n"
+                                f"Worker ID:     {self.worker_id}\n"
+                                f"Shard ID:      {shard_id}\n"
+                                f"{'='*60}"
+                            )
 
                             self.queue_manager.mark_completed(
                                 result['url'],
@@ -153,6 +245,11 @@ class ShardedCrawlerWorker:
                             if shard_id not in self.shard_distribution:
                                 self.shard_distribution[shard_id] = {'success': 0, 'failed': 0}
                             self.shard_distribution[shard_id]['failed'] += 1
+
+                            # 에러 타입별 통계 (새로 추가)
+                            if not hasattr(self, 'error_type_stats'):
+                                self.error_type_stats = {}
+                            self.error_type_stats[error_type] = self.error_type_stats.get(error_type, 0) + 1
 
                     except Exception as e:
                         logging.error(f"샤딩 워커 {self.worker_id} 결과 처리 오류: {e}")
