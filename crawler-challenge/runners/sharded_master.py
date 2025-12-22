@@ -197,13 +197,55 @@ class ShardedCrawlerMaster:
                 self.metrics.inc_error(error_type='monitor_loop_error')
                 await asyncio.sleep(30)
 
+    async def run_tests_and_generate_report(self):
+        """크롤링 완료 후 테스트 실행 및 테스트 리포트 생성"""
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+        try:
+            logging.info("🧪 테스트 실행 및 리포트 생성 시작...")
+
+            # pytest 실행하여 test_report.json 생성
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, '-m', 'pytest',
+                '--json-report',
+                '--json-report-file=test_report.json',
+                '--json-report-indent=2',
+                '-v',
+                cwd=project_root,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logging.info("✅ 테스트 실행 완료 (모두 통과)")
+            else:
+                # 테스트 실패해도 리포트는 생성됨
+                logging.warning(f"⚠️ 일부 테스트 실패 (종료 코드: {process.returncode})")
+
+            # test_report.json이 생성되었는지 확인
+            test_report_path = os.path.join(project_root, 'test_report.json')
+            if os.path.exists(test_report_path):
+                logging.info(f"📄 테스트 리포트 생성됨: {test_report_path}")
+            else:
+                logging.warning("테스트 리포트 파일이 생성되지 않았습니다")
+
+        except Exception as e:
+            logging.error(f"테스트 실행 중 오류: {e}")
+            # 테스트 실패해도 AI 리포트 생성은 계속 진행
+
     async def generate_completion_report(self):
-        """크롤링 완료 후 AI 리포트 자동 생성"""
+        """크롤링 완료 후 테스트 실행 및 AI 리포트 자동 생성"""
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+        # 1단계: 테스트 실행 및 test_report.json 생성
+        await self.run_tests_and_generate_report()
+
+        # 2단계: AI 리포트 생성
         try:
             logging.info("📊 AI 리포트 생성 시작...")
 
-            # 프로젝트 루트 경로
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
             report_script = os.path.join(project_root, 'scripts', 'generate_ai_report.py')
 
             if not os.path.exists(report_script):

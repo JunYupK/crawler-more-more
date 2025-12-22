@@ -178,7 +178,7 @@ class MetricsCollector:
 class TestResultLoader:
     """Pytest 테스트 결과를 로드하는 클래스"""
 
-    def __init__(self, report_path: str = "docs/test_report.json"):
+    def __init__(self, report_path: str = "test_report.json"):
         self.report_path = Path(report_path)
 
     def load(self) -> Optional[Dict]:
@@ -260,7 +260,7 @@ class GeminiReportGenerator:
                 error_str = str(e)
                 # Rate limit (429) 에러인 경우 재시도
                 if "429" in error_str or "quota" in error_str.lower():
-                    wait_time = 10 * (attempt + 1)  # 10초, 20초, 30초
+                    wait_time = 30 * (attempt + 1)  # 30초, 60초, 90초
                     logger.warning(f"Rate limit 초과. {wait_time}초 후 재시도... ({attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
                     continue
@@ -368,7 +368,7 @@ def main():
     )
     parser.add_argument(
         "--test-report",
-        default="docs/test_report.json",
+        default="test_report.json",
         help="Pytest 결과 JSON 파일 경로"
     )
     parser.add_argument(

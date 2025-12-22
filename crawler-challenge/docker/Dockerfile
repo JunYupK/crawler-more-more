@@ -33,11 +33,11 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 
 # Copy application code
-# Copy application code
 COPY src/ ./src/
 COPY runners/ ./runners/
 COPY config/ ./config/
 COPY data/ ./data/
+COPY scripts/ ./scripts/
 
 # Set Python path so src modules can be imported
 ENV PYTHONPATH=/app

@@ -37,6 +37,9 @@ services:
       - "9187:9187" # Prometheus가 긁어갈 포트
     environment:
       DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/crawler_db?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/queries.yaml"
+    volumes:
+      - ./docker/queries.yaml:/queries.yaml:ro
     depends_on:
       - postgres
     restart: always
@@ -57,8 +60,13 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
+      # AI 리포트 생성용 (Prometheus는 Docker 호스트에서 접근)
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - PROMETHEUS_URL=http://100.105.22.101:9090
     volumes:
       - ./logs:/app/logs
+      - ./docs/reports:/app/docs/reports
+      - ./.env:/app/.env:ro
     depends_on:
       redis:
         condition: service_started
