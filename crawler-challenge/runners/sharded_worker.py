@@ -127,7 +127,7 @@ class ShardedCrawlerWorker:
                         if result['success'] and result.get('content'):
                             # 성공 - 데이터베이스에 저장
                             self.db_manager.add_to_batch(result['url'], result['content'])
-                            self.queue_manager.mark_completed(result['url'], success=True)
+                            self.queue_manager.mark_completed(result['url'], success=True, shard_id=shard_id)
                             successful_count += 1
 
                             # 샤드별 성공 통계
@@ -149,7 +149,8 @@ class ShardedCrawlerWorker:
                             self.queue_manager.mark_completed(
                                 result['url'],
                                 success=False,
-                                error_info=error_info
+                                error_info=error_info,
+                                shard_id=shard_id
                             )
                             failed_count += 1
 

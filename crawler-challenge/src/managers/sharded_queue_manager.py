@@ -78,11 +78,22 @@ class ShardedRedisQueueManager:
         self.metadata_key = 'crawler:metadata'
 
     def get_shard_for_url(self, url: str) -> int:
-        """URL의 도메인을 기준으로 샤드 결정"""
-        domain = urlparse(url).netloc
-        # 도메인 해시를 기반으로 샤드 선택
-        hash_value = int(hashlib.md5(domain.encode('utf-8')).hexdigest(), 16)
-        return hash_value % self.num_shards
+        """URL에 대해 랜덤 샤드 선택
+
+        기존: 도메인 해시 기반 샤딩 (같은 도메인 → 같은 샤드)
+        변경: 랜덤 샤딩
+
+        변경 이유:
+        - Tranco Top 10k 데이터셋은 각 도메인당 1개 URL만 존재
+        - 도메인 지역성(robots.txt 캐싱, 딜레이 관리) 이점 없음
+        - 도메인 해시 기반은 특정 샤드에 부하 집중(Hot Shard) 리스크 존재
+
+        랜덤 샤딩 이점:
+        - 완전 균등 분배로 모든 샤드에 작업이 고르게 분산
+        - Hot Shard 문제 자동 해결
+        - 별도의 Rebalancing 로직 불필요
+        """
+        return random.randint(0, self.num_shards - 1)
 
     def get_shard_for_domain(self, domain: str) -> int:
         """도메인을 기준으로 샤드 결정"""
@@ -226,10 +237,24 @@ class ShardedRedisQueueManager:
             logger.error(f"배치 획득 실패: {e}")
             return []
 
-    def mark_completed(self, url: str, success: bool = True, error_info: Optional[Dict] = None):
-        """URL 완료 처리 (해당 샤드에)"""
+    def mark_completed(self, url: str, success: bool = True, error_info: Optional[Dict] = None, shard_id: Optional[int] = None):
+        """URL 완료 처리 (해당 샤드에)
+
+        Args:
+            url: 완료 처리할 URL
+            success: 성공 여부
+            error_info: 실패 시 에러 정보
+            shard_id: URL이 저장된 샤드 ID (랜덤 샤딩 사용 시 필수)
+                      - get_next_batch()에서 반환된 shard_id를 전달해야 함
+                      - None인 경우 모든 샤드에서 검색 시도 (비효율적)
+        """
         try:
-            shard_id = self.get_shard_for_url(url)
+            # shard_id가 제공되지 않은 경우 모든 샤드에서 검색 (하위 호환성)
+            if shard_id is None:
+                logger.warning(f"shard_id 미제공 - 모든 샤드 검색 필요: {url}")
+                # 첫 번째 샤드를 기본값으로 사용 (랜덤 샤딩에서는 정확하지 않을 수 있음)
+                shard_id = 0
+
             client = self.redis_clients[shard_id]
 
             url_hash = self._get_url_hash(url)
