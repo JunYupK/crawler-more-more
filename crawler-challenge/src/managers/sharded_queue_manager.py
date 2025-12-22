@@ -181,18 +181,28 @@ class ShardedRedisQueueManager:
             logger.error(f"샤딩된 큐 초기화 실패: {e}")
             return False
 
-    def get_next_batch(self, batch_size: int = 50, shard_preference: Optional[int] = None) -> List[Dict]:
-        """다음 배치 URL 획득 (샤드 기반 로드 밸런싱)"""
+    def get_next_batch(self, batch_size: int = 50) -> List[Dict]:
+        """다음 배치 URL 획득 (완전 랜덤 샤드 선택)
+
+        기존 방식의 문제점:
+        - 워커별 preferred_shard 할당 (worker_id % num_shards)
+        - 4개 워커, 3개 샤드인 경우:
+          Worker 0,3 → Shard 0 (2배 빠르게 소진)
+          Worker 1 → Shard 1
+          Worker 2 → Shard 2
+        - 결과: 샤드간 불균등한 소진 속도, 빈번한 Rebalancing 발생
+
+        개선된 방식:
+        - 매번 완전 랜덤 순서로 샤드 탐색
+        - 모든 워커가 모든 샤드에 균등하게 접근
+        - 통계적으로 균등한 부하 분산 달성
+        """
         try:
             batch = []
 
-            # 샤드 순서 결정
-            if shard_preference is not None and 0 <= shard_preference < self.num_shards:
-                shard_order = [shard_preference] + [i for i in range(self.num_shards) if i != shard_preference]
-            else:
-                # 랜덤 순서로 샤드 탐색 (로드 밸런싱)
-                shard_order = list(range(self.num_shards))
-                random.shuffle(shard_order)
+            # 완전 랜덤 순서로 샤드 탐색 (균등 로드 밸런싱)
+            shard_order = list(range(self.num_shards))
+            random.shuffle(shard_order)
 
             for shard_id in shard_order:
                 if len(batch) >= batch_size:

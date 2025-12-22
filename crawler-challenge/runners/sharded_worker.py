@@ -36,10 +36,9 @@ def setup_logging(worker_id: int):
 class ShardedCrawlerWorker:
     """샤딩된 분산 크롤러 워커 노드"""
 
-    def __init__(self, worker_id: int, batch_size: int = 25, preferred_shard: Optional[int] = None):
+    def __init__(self, worker_id: int, batch_size: int = 25):
         self.worker_id = worker_id
         self.batch_size = batch_size
-        self.preferred_shard = preferred_shard  # 선호하는 샤드 (로드 밸런싱용)
         self.should_stop = False
 
         # 샤딩된 Redis 연결 설정
@@ -82,11 +81,7 @@ class ShardedCrawlerWorker:
                 logging.error("Redis 샤드 연결 실패")
                 return False
 
-            # 선호 샤드 설정 (워커 ID 기반)
-            if self.preferred_shard is None:
-                self.preferred_shard = self.worker_id % self.queue_manager.num_shards
-
-            logging.info(f"[OK] 샤딩 워커 {self.worker_id} 초기화 완료 (선호 샤드: {self.preferred_shard})")
+            logging.info(f"[OK] 샤딩 워커 {self.worker_id} 초기화 완료 (랜덤 샤드 선택)")
             return True
 
         except Exception as e:
@@ -183,16 +178,15 @@ class ShardedCrawlerWorker:
                 logging.error(f"샤딩 워커 {self.worker_id} 초기화 실패")
                 return False
 
-            logging.info(f"샤딩 워커 {self.worker_id} 작업 시작 (선호 샤드: {self.preferred_shard})")
+            logging.info(f"샤딩 워커 {self.worker_id} 작업 시작 (랜덤 샤드 선택)")
 
             consecutive_empty = 0
 
             while not self.should_stop:
                 try:
-                    # 샤딩된 큐에서 배치 가져오기 (선호 샤드 우선)
+                    # 샤딩된 큐에서 배치 가져오기 (랜덤 샤드 순서)
                     batch = self.queue_manager.get_next_batch(
-                        batch_size=self.batch_size,
-                        shard_preference=self.preferred_shard
+                        batch_size=self.batch_size
                     )
 
                     if not batch:
@@ -252,17 +246,15 @@ async def main():
     parser = argparse.ArgumentParser(description='Sharded Distributed Crawler - Worker')
     parser.add_argument('--worker-id', type=int, default=1, help='워커 ID')
     parser.add_argument('--batch-size', type=int, default=25, help='배치 크기')
-    parser.add_argument('--preferred-shard', type=int, default=None, help='선호 샤드 ID')
-    
+
     args = parser.parse_args()
-    
+
     setup_logging(args.worker_id)
-    
-    print(f"샤딩된 분산 크롤러 워커 {args.worker_id} 시작")
+
+    print(f"샤딩된 분산 크롤러 워커 {args.worker_id} 시작 (랜덤 샤드 선택)")
     worker = ShardedCrawlerWorker(
         worker_id=args.worker_id,
-        batch_size=args.batch_size,
-        preferred_shard=args.preferred_shard
+        batch_size=args.batch_size
     )
     success = await worker.run()
     sys.exit(0 if success else 1)
