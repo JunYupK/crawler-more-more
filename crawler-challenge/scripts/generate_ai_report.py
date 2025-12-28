@@ -19,6 +19,7 @@ import json
 import logging
 import argparse
 import time
+import platform
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -39,6 +40,30 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def get_prometheus_url() -> str:
+    """
+    실행 환경에 따라 적절한 Prometheus URL 반환
+
+    - Mac (Darwin): localhost:9090 사용 (로컬 Docker 컨테이너)
+    - 기타: .env의 PROMETHEUS_URL 사용 (Tailscale 원격 접속)
+    """
+    # 환경변수에서 명시적으로 지정된 경우 우선 사용
+    env_url = os.getenv("PROMETHEUS_URL")
+
+    # Mac 환경인 경우 localhost 사용
+    if platform.system() == "Darwin":
+        logger.info("Mac 환경 감지: localhost:9090 사용")
+        return "http://localhost:9090"
+
+    # 기타 환경에서는 .env의 PROMETHEUS_URL 사용 (Tailscale)
+    if env_url:
+        logger.info(f"외부 환경: {env_url} 사용")
+        return env_url
+
+    # 기본값
+    return "http://100.105.22.101:9090"
 
 
 class MetricsCollector:
@@ -96,29 +121,42 @@ class MetricsCollector:
 
         # 수집할 메트릭 쿼리 목록
         queries = {
-            # TPS (Transactions Per Second)
-            "tps": "rate(crawler_requests_total[5m])",
-            "tps_avg": "avg_over_time(rate(crawler_requests_total[5m])[{}m:1m])".format(time_range_minutes),
+            # === 크롤러 작업 메트릭 ===
+            "crawler_tasks_completed": "crawler_tasks_completed_total",
+            "crawler_tasks_failed": "crawler_tasks_failed_total",
+            "crawler_tasks_success_rate": "rate(crawler_tasks_completed_total[5m]) / (rate(crawler_tasks_completed_total[5m]) + rate(crawler_tasks_failed_total[5m])) * 100",
 
-            # DB Connections
-            "db_connections_active": "pg_stat_activity_count",
-            "db_connections_idle": "pg_stat_activity_count{state='idle'}",
+            # === 크롤러 큐 메트릭 ===
+            "crawler_queue_pending": "crawler_queue_pending",
+            "crawler_queue_processing": "crawler_queue_processing",
+            "crawler_shard_pending": "crawler_shard_pending",
 
-            # Rollback Rate
-            "db_rollbacks_total": "pg_stat_database_xact_rollback",
-            "db_commits_total": "pg_stat_database_xact_commit",
+            # === 크롤러 시스템 리소스 ===
+            "crawler_cpu_percent": "crawler_system_cpu_percent",
+            "crawler_memory_percent": "crawler_system_memory_percent",
 
-            # CPU Usage
-            "cpu_usage_percent": "100 - (avg(rate(node_cpu_seconds_total{mode='idle'}[5m])) * 100)",
+            # === 크롤러 처리 지연 시간 (Latency) ===
+            "crawler_latency_avg": "rate(crawler_process_latency_seconds_sum[5m]) / rate(crawler_process_latency_seconds_count[5m])",
+            "crawler_latency_p95": "histogram_quantile(0.95, rate(crawler_process_latency_seconds_bucket[5m]))",
+            "crawler_latency_p99": "histogram_quantile(0.99, rate(crawler_process_latency_seconds_bucket[5m]))",
 
-            # Memory Usage
-            "memory_usage_percent": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+            # === PostgreSQL 크롤러 통계 (postgres-exporter) ===
+            "pg_crawler_throughput": "pg_crawler_throughput_pages_per_second",
+            "pg_crawler_total_pages": "pg_crawler_stats_total_pages",
+            "pg_crawler_pages_1min": "pg_crawler_stats_pages_last_1min",
+            "pg_crawler_pages_5min": "pg_crawler_stats_pages_last_5min",
+            "pg_crawler_pages_1hour": "pg_crawler_stats_pages_last_1hour",
+            "pg_crawler_unique_domains": "pg_crawler_stats_unique_domains",
+            "pg_crawler_avg_content_length": "pg_crawler_stats_avg_content_length",
 
-            # Crawler specific metrics
-            "crawler_pages_crawled": "crawler_pages_crawled_total",
-            "crawler_errors_total": "crawler_errors_total",
-            "crawler_queue_size": "crawler_queue_size",
-            "crawler_batch_size": "crawler_batch_size",
+            # === PostgreSQL DLQ (Dead Letter Queue) ===
+            "pg_crawler_dlq_total": "pg_crawler_dlq_dlq_total",
+            "pg_crawler_dlq_unique_errors": "pg_crawler_dlq_dlq_unique_errors",
+            "pg_crawler_dlq_last_1hour": "pg_crawler_dlq_dlq_last_1hour",
+
+            # === PostgreSQL DB 메트릭 ===
+            "pg_database_size_bytes": "pg_database_size_bytes",
+            "pg_locks_count": "pg_locks_count",
         }
 
         for metric_name, query in queries.items():
@@ -242,9 +280,9 @@ class GeminiReportGenerator:
             logger.error(f"Gemini API 설정 실패: {e}")
             raise
 
-    def generate_report(self, metrics: Dict, test_results: Optional[Dict], max_retries: int = 3) -> str:
+    def generate_report(self, metrics: Dict, test_results: Optional[Dict], previous_report: Optional[str] = None, max_retries: int = 3) -> str:
         """메트릭과 테스트 결과를 분석하여 리포트 생성 (자동 재시도 포함)"""
-        prompt = self._build_prompt(metrics, test_results)
+        prompt = self._build_prompt(metrics, test_results, previous_report)
 
         for attempt in range(max_retries):
             try:
@@ -270,11 +308,65 @@ class GeminiReportGenerator:
 
         raise Exception(f"최대 재시도 횟수({max_retries})를 초과했습니다.")
 
-    def _build_prompt(self, metrics: Dict, test_results: Optional[Dict]) -> str:
+    def _build_prompt(self, metrics: Dict, test_results: Optional[Dict], previous_report: Optional[str] = None) -> str:
         """분석 프롬프트 구성"""
-        prompt = """당신은 분산 크롤러 시스템의 성능 분석 전문가입니다.
+
+        # 기본 프롬프트
+        if previous_report:
+            # 이전 리포트가 있는 경우 - 비교 분석 요청
+            prompt = """당신은 분산 크롤러 시스템의 성능 분석 전문가입니다.
 아래 제공된 Prometheus 메트릭 데이터와 테스트 결과를 분석하여
 한국어로 된 기술 리포트를 작성해주세요.
+
+**중요: 이전 리포트와 비교하여 변화 사항을 분석해주세요.**
+
+## 요청사항
+1. **성능 요약 (Performance Summary)**:
+   - 전체적인 시스템 성능을 요약
+   - **이전 리포트 대비 개선/악화된 지표를 명확히 표시** (예: ↑ 10% 증가, ↓ 5% 감소)
+
+2. **변화 분석 (Change Analysis)**:
+   - 이전 리포트와 비교하여 주요 변화 사항 식별
+   - 성능이 개선된 부분과 악화된 부분을 구분하여 설명
+   - 변화의 원인 추정
+
+3. **병목 구간 분석 (Bottleneck Analysis)**:
+   - 현재 성능 저하가 발생하는 지점 식별
+   - 이전에 없던 새로운 병목이 발생했다면 강조
+
+4. **개선 제안 (Recommendations)**:
+   - 구체적인 개선 방안 제시
+   - 우선순위가 높은 개선 사항 강조
+
+## 출력 형식
+- Markdown 형식으로 작성
+- 기술 용어는 영어 병기 (예: 처리량(Throughput))
+- 수치 데이터는 표로 정리
+- **변화가 있는 지표는 화살표와 함께 표시** (↑, ↓, →)
+- 중요한 인사이트는 강조 표시
+
+---
+
+## 이전 리포트 (비교 대상)
+```markdown
+{previous_report}
+```
+
+---
+
+## 현재 수집된 메트릭 데이터
+```json
+{metrics_json}
+```
+
+"""
+        else:
+            # 첫 번째 리포트인 경우 - 일반 분석
+            prompt = """당신은 분산 크롤러 시스템의 성능 분석 전문가입니다.
+아래 제공된 Prometheus 메트릭 데이터와 테스트 결과를 분석하여
+한국어로 된 기술 리포트를 작성해주세요.
+
+**참고: 이것은 첫 번째 리포트입니다. 이전 데이터가 없으므로 현재 상태만 분석합니다.**
 
 ## 요청사항
 1. **성능 요약 (Performance Summary)**: 전체적인 시스템 성능을 요약해주세요.
@@ -296,6 +388,7 @@ class GeminiReportGenerator:
 
 """
 
+        # 테스트 결과 추가
         if test_results:
             prompt += """
 ## 테스트 결과
@@ -303,15 +396,21 @@ class GeminiReportGenerator:
 {test_json}
 ```
 """
-            prompt = prompt.format(
-                metrics_json=json.dumps(metrics, indent=2, ensure_ascii=False, default=str),
-                test_json=json.dumps(test_results, indent=2, ensure_ascii=False, default=str)
-            )
+            format_dict = {
+                "metrics_json": json.dumps(metrics, indent=2, ensure_ascii=False, default=str),
+                "test_json": json.dumps(test_results, indent=2, ensure_ascii=False, default=str)
+            }
         else:
             prompt += "\n## 테스트 결과\n테스트 결과 파일이 제공되지 않았습니다.\n"
-            prompt = prompt.format(
-                metrics_json=json.dumps(metrics, indent=2, ensure_ascii=False, default=str)
-            )
+            format_dict = {
+                "metrics_json": json.dumps(metrics, indent=2, ensure_ascii=False, default=str)
+            }
+
+        # 이전 리포트 추가 (있는 경우)
+        if previous_report:
+            format_dict["previous_report"] = previous_report
+
+        prompt = prompt.format(**format_dict)
 
         prompt += """
 ---
@@ -329,6 +428,28 @@ class ReportSaver:
     def __init__(self, output_dir: str = "docs/reports"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_latest_report(self) -> Optional[str]:
+        """가장 최근에 생성된 리포트 파일의 내용을 반환"""
+        try:
+            # report_*.md 패턴의 파일들을 찾기
+            report_files = list(self.output_dir.glob("report_*.md"))
+
+            if not report_files:
+                logger.info("이전 리포트가 없습니다. 첫 번째 리포트를 생성합니다.")
+                return None
+
+            # 수정 시간 기준으로 정렬하여 가장 최근 파일 찾기
+            latest_file = max(report_files, key=lambda p: p.stat().st_mtime)
+
+            with open(latest_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            logger.info(f"이전 리포트 발견: {latest_file.name}")
+            return content
+        except Exception as e:
+            logger.warning(f"이전 리포트 로드 실패: {e}")
+            return None
 
     def save(self, content: str) -> str:
         """리포트 저장 및 파일 경로 반환"""
@@ -357,8 +478,8 @@ def main():
     parser = argparse.ArgumentParser(description="Gemini 기반 크롤러 성능 리포트 생성기")
     parser.add_argument(
         "--prometheus-url",
-        default=os.getenv("PROMETHEUS_URL", "http://100.105.22.101:9090"),
-        help="Prometheus 서버 URL (Tailscale: 윈도우 데스크탑)"
+        default=None,  # None으로 설정하여 자동 감지 활성화
+        help="Prometheus 서버 URL (미지정 시 자동 감지: Mac=localhost:9090, 기타=Tailscale URL)"
     )
     parser.add_argument(
         "--time-range",
@@ -388,9 +509,13 @@ def main():
     logger.info("크롤러 성능 리포트 생성 시작")
     logger.info("=" * 60)
 
+    # Prometheus URL 자동 결정
+    prometheus_url = args.prometheus_url if args.prometheus_url else get_prometheus_url()
+    logger.info(f"Prometheus URL: {prometheus_url}")
+
     # 1. Prometheus 메트릭 수집
     logger.info("[1/4] Prometheus 메트릭 수집 중...")
-    collector = MetricsCollector(args.prometheus_url)
+    collector = MetricsCollector(prometheus_url)
 
     if collector.connect():
         metrics = collector.collect_crawler_metrics(args.time_range)
@@ -416,19 +541,28 @@ def main():
     else:
         logger.info("  - 테스트 결과 없음 (Skip)")
 
-    # 3. Gemini 리포트 생성
-    logger.info("[3/4] Gemini API로 리포트 생성 중...")
+    # 3. 이전 리포트 로드 (있는 경우)
+    logger.info("[3/5] 이전 리포트 확인 중...")
+    saver = ReportSaver(args.output_dir)
+    previous_report = saver.get_latest_report()
+
+    if previous_report:
+        logger.info("  - 이전 리포트를 참고하여 비교 분석 수행")
+    else:
+        logger.info("  - 첫 번째 리포트 생성 (비교 대상 없음)")
+
+    # 4. Gemini 리포트 생성
+    logger.info("[4/5] Gemini API로 리포트 생성 중...")
     try:
         generator = GeminiReportGenerator(api_key)
-        report_content = generator.generate_report(metrics, test_summary)
+        report_content = generator.generate_report(metrics, test_summary, previous_report)
         logger.info("  - 리포트 생성 완료")
     except Exception as e:
         logger.error(f"리포트 생성 실패: {e}")
         sys.exit(1)
 
-    # 4. 리포트 저장
-    logger.info("[4/4] 리포트 저장 중...")
-    saver = ReportSaver(args.output_dir)
+    # 5. 리포트 저장
+    logger.info("[5/5] 리포트 저장 중...")
     saved_path = saver.save(report_content)
 
     logger.info("=" * 60)
