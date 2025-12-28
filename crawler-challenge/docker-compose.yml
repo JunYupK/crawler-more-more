@@ -53,7 +53,7 @@ services:
       dockerfile: docker/Dockerfile
     container_name: crawler-master
     # 실제 실행 명령어 (테스트 끝났으면 주석 해제)
-    command: python runners/sharded_master.py --count 10000 --workers 4
+    command: python runners/sharded_master.py --count 100000 --workers 4
     environment:
       # 같은 도커 네트워크라 서비스명(redis, postgres)으로 접속 가능
       - REDIS_HOST=redis
@@ -98,6 +98,42 @@ services:
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-2
     command: python runners/sharded_worker.py --worker-id 2
+    environment:
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      crawler-master:
+        condition: service_started
+    restart: always
+
+  crawler-worker-3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: crawler-worker-3
+    command: python runners/sharded_worker.py --worker-id 3
+    environment:
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      crawler-master:
+        condition: service_started
+    restart: always
+
+  crawler-worker-4:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: crawler-worker-4
+    command: python runners/sharded_worker.py --worker-id 4
     environment:
       - REDIS_HOST=redis
       - POSTGRES_HOST=postgres
