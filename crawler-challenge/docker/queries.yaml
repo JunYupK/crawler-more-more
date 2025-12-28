@@ -34,15 +34,14 @@ pg_crawler_stats:
 pg_crawler_dlq:
   query: |
     SELECT
-      COUNT(*) as dlq_total,
-      COUNT(CASE WHEN created_at > NOW() - INTERVAL '1 hour' THEN 1 END) as dlq_last_1hour,
-      COALESCE(
-        (SELECT COUNT(*) FROM crawler_dlq WHERE error_type = 'DataError'), 0
-      ) as dlq_data_errors,
-      COALESCE(
-        (SELECT COUNT(*) FROM crawler_dlq WHERE error_type = 'UniqueViolationError'), 0
-      ) as dlq_unique_errors
-    FROM crawler_dlq
+      COALESCE((SELECT COUNT(*) FROM crawler_dlq), 0) as dlq_total,
+      COALESCE((SELECT COUNT(*) FROM crawler_dlq WHERE created_at > NOW() - INTERVAL '1 hour'), 0) as dlq_last_1hour,
+      COALESCE((SELECT COUNT(*) FROM crawler_dlq WHERE error_type = 'DataError'), 0) as dlq_data_errors,
+      COALESCE((SELECT COUNT(*) FROM crawler_dlq WHERE error_type = 'UniqueViolationError'), 0) as dlq_unique_errors
+    WHERE EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'crawler_dlq')
+    UNION ALL
+    SELECT 0, 0, 0, 0
+    WHERE NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'crawler_dlq')
   metrics:
     - dlq_total:
         usage: "GAUGE"
@@ -71,13 +70,24 @@ pg_crawler_throughput:
 pg_domain_stats:
   query: |
     SELECT
-      domain,
-      COUNT(*) as page_count
+      'total' as metric_type,
+      COUNT(DISTINCT domain)::bigint as domain_count
     FROM crawled_pages
-    GROUP BY domain
-    ORDER BY page_count DESC
-    LIMIT 10
+    UNION ALL
+    SELECT
+      'top_10_total' as metric_type,
+      SUM(page_count)::bigint as domain_count
+    FROM (
+      SELECT COUNT(*) as page_count
+      FROM crawled_pages
+      GROUP BY domain
+      ORDER BY page_count DESC
+      LIMIT 10
+    ) top_domains
   metrics:
-    - page_count:
+    - metric_type:
+        usage: "LABEL"
+        description: "Type of domain metric"
+    - domain_count:
         usage: "GAUGE"
-        description: "Pages per domain (top 10)"
+        description: "Domain count metric"
