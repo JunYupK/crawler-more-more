@@ -154,7 +154,8 @@ class TrancoManager:
         logger.info(f"URL 데이터셋 준비 시작 (목표: {initial_count}개)")
 
         # 1. Tranco 라이브러리로 목록 가져오기
-        domain_count_to_fetch = min(initial_count // 4, 2500)
+        # 도메인당 4개 URL 생성 (https, http, www https, www http)
+        domain_count_to_fetch = min(initial_count // 4, 250000)  # 최대 100만개 URL까지 지원
         latest_tranco_list = await self.get_latest_list(limit=domain_count_to_fetch)
         if not latest_tranco_list:
             logger.error("Tranco 목록을 가져오지 못했습니다.")
