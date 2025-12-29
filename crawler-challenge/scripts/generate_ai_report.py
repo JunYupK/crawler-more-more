@@ -157,6 +157,48 @@ class MetricsCollector:
             # === PostgreSQL DB 메트릭 ===
             "pg_database_size_bytes": "pg_database_size_bytes",
             "pg_locks_count": "pg_locks_count",
+
+            # === 크롤링 에러 분석 메트릭 (NEW) ===
+            # 에러 타입별 총 발생 횟수
+            "crawl_errors_by_type": "sum by (error_type) (crawl_errors_total)",
+
+            # 문제 도메인 TOP 10 (가장 많이 실패한 도메인)
+            "crawl_errors_by_domain_top10": "topk(10, sum by (domain) (domain_failures_total))",
+
+            # HTTP 상태 코드 분포
+            "crawl_http_status_distribution": "sum by (status_code) (crawl_http_status_total)",
+
+            # 워커별 성공률
+            "crawl_worker_success_rates": "crawl_success_rate",
+
+            # 에러 발생률 추이 (5분 단위)
+            "crawl_error_rate_trend": "rate(crawl_errors_total[5m])",
+
+            # 전체 요청 수 (성공/실패별)
+            "crawl_requests_success": "sum(crawl_requests_total{status='success'})",
+            "crawl_requests_failed": "sum(crawl_requests_total{status='failed'})",
+
+            # 특정 에러 타입별 상세 카운트
+            "crawl_timeout_errors": "sum(crawl_errors_total{error_type='timeout'})",
+            "crawl_connection_errors": "sum(crawl_errors_total{error_type='connection_error'})",
+            "crawl_dns_errors": "sum(crawl_errors_total{error_type='dns_error'})",
+            "crawl_ssl_errors": "sum(crawl_errors_total{error_type='ssl_error'})",
+            "crawl_http_403_errors": "sum(crawl_errors_total{error_type='http_403'})",
+            "crawl_http_404_errors": "sum(crawl_errors_total{error_type='http_404'})",
+            "crawl_http_429_errors": "sum(crawl_errors_total{error_type='http_429'})",
+            "crawl_http_5xx_errors": "sum(crawl_errors_total{error_type='http_5xx'})",
+            "crawl_robots_blocked_errors": "sum(crawl_errors_total{error_type='robots_blocked'})",
+            "crawl_content_errors": "sum(crawl_errors_total{error_type='content_error'})",
+            "crawl_unknown_errors": "sum(crawl_errors_total{error_type='unknown'})",
+
+            # 응답 시간 분석 (성공 vs 실패)
+            "crawl_response_time_success_p50": "histogram_quantile(0.5, sum by (le) (crawl_response_time_seconds_bucket{success='true'}))",
+            "crawl_response_time_success_p95": "histogram_quantile(0.95, sum by (le) (crawl_response_time_seconds_bucket{success='true'}))",
+            "crawl_response_time_failed_p50": "histogram_quantile(0.5, sum by (le) (crawl_response_time_seconds_bucket{success='false'}))",
+            "crawl_response_time_failed_p95": "histogram_quantile(0.95, sum by (le) (crawl_response_time_seconds_bucket{success='false'}))",
+
+            # 도메인별 에러율 TOP 10
+            "crawl_domain_error_rate_top10": "topk(10, sum by (domain) (domain_failures_total) / (sum by (domain) (domain_failures_total) + sum by (domain) (crawl_requests_total{status='success'})) * 100)",
         }
 
         for metric_name, query in queries.items():
@@ -334,8 +376,18 @@ class GeminiReportGenerator:
    - 현재 성능 저하가 발생하는 지점 식별
    - 이전에 없던 새로운 병목이 발생했다면 강조
 
-4. **개선 제안 (Recommendations)**:
+4. **에러 분석 (Error Analysis)**:
+   - 에러 타입별 발생 빈도 분석 (timeout, connection_error, http_403, http_404, http_429, http_5xx 등)
+   - 가장 많이 실패한 도메인 TOP 10 분석
+   - HTTP 상태 코드 분포 분석
+   - 워커별 성공률 비교
+   - 에러 발생 추이 분석 (증가/감소 추세)
+   - 실패한 요청의 응답 시간과 성공 요청의 응답 시간 비교
+   - 주요 문제점 및 원인 추정
+
+5. **개선 제안 (Recommendations)**:
    - 구체적인 개선 방안 제시
+   - 에러율을 낮추기 위한 구체적인 방안 포함
    - 우선순위가 높은 개선 사항 강조
 
 ## 출력 형식
@@ -371,7 +423,15 @@ class GeminiReportGenerator:
 ## 요청사항
 1. **성능 요약 (Performance Summary)**: 전체적인 시스템 성능을 요약해주세요.
 2. **병목 구간 분석 (Bottleneck Analysis)**: 성능 저하가 발생할 수 있는 지점을 식별해주세요.
-3. **개선 제안 (Recommendations)**: 구체적인 개선 방안을 제시해주세요.
+3. **에러 분석 (Error Analysis)**:
+   - 에러 타입별 발생 빈도 분석 (timeout, connection_error, http_403, http_404, http_429, http_5xx 등)
+   - 가장 많이 실패한 도메인 TOP 10 분석
+   - HTTP 상태 코드 분포 분석
+   - 워커별 성공률 비교
+   - 에러 발생 추이 분석
+   - 실패한 요청의 응답 시간과 성공 요청의 응답 시간 비교
+   - 주요 문제점 및 원인 추정
+4. **개선 제안 (Recommendations)**: 구체적인 개선 방안을 제시해주세요. 특히 에러율을 낮추기 위한 방안을 포함해주세요.
 
 ## 출력 형식
 - Markdown 형식으로 작성
