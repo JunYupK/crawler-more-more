@@ -185,98 +185,45 @@ class PoliteCrawler:
         return self.domain_states[domain]
 
     async def is_allowed_to_fetch(self, url: str) -> Tuple[bool, str]:
-        """URL 크롤링 허용 여부 확인"""
-        if not self.respect_robots_txt:
-            return True, "허용 (robots.txt 무시)"
-        try:
-            parsed_url = urlparse(url)
-            domain = parsed_url.netloc
+        """크롤링 허용 여부 - respect_robots_txt=False이므로 항상 허용
 
-            domain_state = self._get_domain_state(domain)
-
-            # 너무 많은 에러 발생시 차단
-            if domain_state.error_count >= self.max_errors_per_domain:
-                domain_state.is_blocked = True
-                return False, f"도메인 에러 한도 초과 ({domain_state.error_count})"
-
-            # 이미 차단된 도메인
-            if domain_state.is_blocked:
-                return False, "도메인 차단됨"
-
-            # robots.txt 미확인시 확인
-            if not domain_state.robots_checked:
-                robots_rules = await self.check_robots_txt(domain)
-                domain_state.robots_rules = robots_rules
-                domain_state.robots_checked = True
-                domain_state.crawl_delay = robots_rules.crawl_delay
-
-            # robots.txt 규칙 확인 (URL별로)
-            if domain_state.robots_rules:
-                if not domain_state.robots_rules.parser.can_fetch(self.user_agent, url):
-                    return False, f"robots.txt에 의해 차단됨: {url}"
-
-            # 딜레이 확인
-            now = datetime.now()
-            if now < domain_state.next_allowed_time:
-                wait_time = (domain_state.next_allowed_time - now).total_seconds()
-                return False, f"딜레이 대기 중 ({wait_time:.1f}초 남음)"
-
-            return True, "허용"
-
-        except Exception as e:
-            logger.error(f"크롤링 허용 확인 실패 ({url}): {e}")
-            return False, f"확인 실패: {e}"
+        랜덤 샤딩 환경에서는 robots.txt 체크가 불필요하므로 즉시 허용을 반환합니다.
+        이 메서드는 하위 호환성을 위해 유지되지만 실제로는 사용되지 않습니다.
+        """
+        return True, "허용 (robots.txt 무시 모드)"
 
     async def wait_for_domain_delay(self, domain: str):
-        """도메인별 딜레이 대기"""
-        domain_state = self._get_domain_state(domain)
+        """도메인별 딜레이 대기 - 랜덤 샤딩 환경에서는 불필요
 
-        now = datetime.now()
-        if now < domain_state.next_allowed_time:
-            wait_time = (domain_state.next_allowed_time - now).total_seconds()
-            logger.debug(f"도메인 딜레이 대기: {domain} ({wait_time:.1f}초)")
-            await asyncio.sleep(wait_time)
-
-        # 다음 허용 시간 설정
-        domain_state.next_allowed_time = datetime.now() + timedelta(seconds=domain_state.crawl_delay)
+        랜덤 샤딩 환경에서는 도메인별 딜레이가 불필요하므로 즉시 리턴합니다.
+        이 메서드는 하위 호환성을 위해 유지되지만 실제로는 사용되지 않습니다.
+        """
+        return  # 즉시 리턴
 
     async def fetch_url_politely(self, url: str) -> Dict[str, any]:
-        """정중한 방식으로 URL 크롤링"""
+        """URL 크롤링 (robots.txt 체크 및 딜레이 제거)
+
+        랜덤 샤딩 환경에서는 robots.txt 체크와 도메인별 딜레이가 불필요합니다.
+        global_semaphore만으로 동시성을 제어하여 최대 처리량을 달성합니다.
+        """
         parsed_url = urlparse(url)
         domain = parsed_url.netloc
 
         try:
-            # 크롤링 허용 확인
-            allowed, reason = await self.is_allowed_to_fetch(url)
-            if not allowed:
-                return {
-                    'url': url,
-                    'success': False,
-                    'error': f"크롤링 불허: {reason}",
-                    'status': None,
-                    'content': None
-                }
+            # robots.txt 체크 제거 (respect_robots_txt=False)
+            # 도메인별 딜레이 제거 (랜덤 샤딩 환경)
 
-            # 글로벌 세마포어로 동시 요청 제한
             async with self.global_semaphore:
-                # 도메인별 딜레이 대기
-                await self.wait_for_domain_delay(domain)
+                start_time = time.time()
 
-                domain_state = self._get_domain_state(domain)
-
-                # 요청 실행
                 async with self.session.get(url) as response:
                     content = await response.text()
+                    response_time = time.time() - start_time
 
-                    # 성공 처리
+                    # 상태 추적 (통계용)
+                    domain_state = self._get_domain_state(domain)
                     domain_state.last_access = datetime.now()
                     domain_state.request_count += 1
-
-                    # 상태 코드별 처리
-                    if response.status == 429:  # Too Many Requests
-                        # 딜레이 증가
-                        domain_state.crawl_delay = min(domain_state.crawl_delay * 2, self.max_delay)
-                        logger.warning(f"429 에러로 인한 딜레이 증가: {domain} ({domain_state.crawl_delay}초)")
 
                     return {
                         'url': url,
@@ -285,7 +232,7 @@ class PoliteCrawler:
                         'content': content,
                         'content_length': len(content),
                         'domain': domain,
-                        'crawl_delay': domain_state.crawl_delay,
+                        'response_time': response_time,
                         'headers': dict(response.headers)
                     }
 
@@ -304,11 +251,6 @@ class PoliteCrawler:
         except aiohttp.ClientError as e:
             domain_state = self._get_domain_state(domain)
             domain_state.error_count += 1
-
-            # 연결 오류가 많을 경우 딜레이 증가
-            if domain_state.error_count % 3 == 0:
-                domain_state.crawl_delay = min(domain_state.crawl_delay * 1.5, self.max_delay)
-
             return {
                 'url': url,
                 'success': False,
@@ -321,7 +263,6 @@ class PoliteCrawler:
         except Exception as e:
             domain_state = self._get_domain_state(domain)
             domain_state.error_count += 1
-
             logger.error(f"크롤링 실패 ({url}): {e}")
             return {
                 'url': url,
@@ -333,66 +274,38 @@ class PoliteCrawler:
             }
 
     async def crawl_batch_politely(self, urls: List[str]) -> List[Dict[str, any]]:
-        """URL 배치를 정중하게 크롤링"""
-        logger.info(f"정중한 배치 크롤링 시작: {len(urls)}개 URL")
+        """URL 배치를 동시 크롤링 (도메인 무관)
 
-        # 도메인별 그룹화
-        domain_groups = {}
-        for url in urls:
-            domain = urlparse(url).netloc
-            if domain not in domain_groups:
-                domain_groups[domain] = []
-            domain_groups[domain].append(url)
+        랜덤 샤딩 환경에서는 도메인별 그룹화가 불필요하므로
+        전체 URL을 한 번에 동시 처리하여 처리량을 극대화합니다.
+        global_semaphore가 동시성을 제어합니다.
+        """
+        logger.info(f"배치 크롤링 시작: {len(urls)}개 URL")
 
-        logger.info(f"도메인별 분산: {len(domain_groups)}개 도메인")
+        # 전체 URL을 한 번에 동시 처리
+        # global_semaphore가 동시성 제어
+        tasks = [self.fetch_url_politely(url) for url in urls]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 도메인별로 순차 처리, 전체적으로는 병렬 처리
-        tasks = []
-        for domain, domain_urls in domain_groups.items():
-            task = asyncio.create_task(self._crawl_domain_urls(domain, domain_urls))
-            tasks.append(task)
-
-        # 모든 도메인 크롤링 완료 대기
-        domain_results = await asyncio.gather(*tasks)
-
-        # 결과 합치기
-        all_results = []
-        for domain_result in domain_results:
-            all_results.extend(domain_result)
-
-        logger.info(f"정중한 배치 크롤링 완료: {len(all_results)}개 결과")
-        return all_results
-
-    async def _crawl_domain_urls(self, domain: str, urls: List[str]) -> List[Dict[str, any]]:
-        """단일 도메인의 URL들을 순차 크롤링"""
-        results = []
-
-        logger.debug(f"도메인 크롤링 시작: {domain} ({len(urls)}개 URL)")
-
-        for url in urls:
-            try:
-                result = await self.fetch_url_politely(url)
-                results.append(result)
-
-                # 성공/실패 로깅 (이모지 제거)
-                if result['success']:
-                    logger.debug(f"[OK] {url} - {result['status']}")
-                else:
-                    logger.debug(f"[FAIL] {url} - {result['error']}")
-
-            except Exception as e:
-                logger.error(f"도메인 크롤링 오류 ({url}): {e}")
-                results.append({
-                    'url': url,
+        # 예외 처리
+        final_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"크롤링 예외 ({urls[i]}): {result}")
+                final_results.append({
+                    'url': urls[i],
                     'success': False,
-                    'error': f'Domain crawling error: {str(e)}',
+                    'error': str(result),
                     'status': None,
                     'content': None,
-                    'domain': domain
+                    'domain': urlparse(urls[i]).netloc
                 })
+            else:
+                final_results.append(result)
 
-        logger.debug(f"도메인 크롤링 완료: {domain}")
-        return results
+        logger.info(f"배치 크롤링 완료: {len(final_results)}개 결과")
+        return final_results
+
 
     def get_domain_stats(self) -> Dict[str, Dict[str, any]]:
         """도메인별 통계"""

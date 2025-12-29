@@ -102,7 +102,7 @@ def setup_logging(worker_id: int):
 class ShardedCrawlerWorker:
     """샤딩된 분산 크롤러 워커 노드"""
 
-    def __init__(self, worker_id: int, batch_size: int = 25):
+    def __init__(self, worker_id: int, batch_size: int = 50):
         self.worker_id = worker_id
         self.batch_size = batch_size
         self.should_stop = False
@@ -377,7 +377,7 @@ class ShardedCrawlerWorker:
 async def main():
     parser = argparse.ArgumentParser(description='Sharded Distributed Crawler - Worker')
     parser.add_argument('--worker-id', type=int, default=1, help='워커 ID')
-    parser.add_argument('--batch-size', type=int, default=25, help='배치 크기')
+    parser.add_argument('--batch-size', type=int, default=50, help='배치 크기')
 
     args = parser.parse_args()
 
