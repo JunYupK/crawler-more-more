@@ -9,6 +9,7 @@ import logging
 import signal
 import argparse
 import subprocess
+import time
 from datetime import datetime
 from typing import Optional
 from src.monitoring.metrics import MetricsManager
@@ -119,6 +120,10 @@ class ShardedCrawlerMaster:
             # [Metric] 4. 초기 상태 반영
             self.metrics.update_queue_stats(queue_stats)
 
+            # [Metric] 크롤링 시작 시간 기록
+            self.metrics.session_start_timestamp.set(time.time())
+            logging.info(f"✅ 크롤링 세션 시작 시간 기록: {datetime.now().isoformat()}")
+
             # 통계 출력
             queue_stats = self.queue_manager.get_queue_stats()
             logging.info(f"샤딩된 큐 로딩 완료:")
@@ -186,8 +191,32 @@ class ShardedCrawlerMaster:
                     queue_stats.get('processing', 0) == 0 and
                     queue_stats.get('completed', 0) > 0):
                     logging.info("✅ 모든 샤딩된 작업 완료")
+
+                    # [Metric] 크롤링 종료 시간 기록
+                    self.metrics.session_end_timestamp.set(time.time())
+                    logging.info(f"✅ 크롤링 세션 종료 시간 기록: {datetime.now().isoformat()}")
+
+                    # Prometheus scrape 반영을 위한 대기 (30초)
+                    logging.info("⏳ Prometheus 메트릭 반영 대기 중 (30초)...")
+                    await asyncio.sleep(30)
+
                     # 자동 리포트 생성
                     await self.generate_completion_report()
+
+                    # 대기 모드 진입
+                    logging.info("=" * 60)
+                    logging.info("🎉 크롤링 완료 및 보고서 생성 완료")
+                    logging.info("📊 메트릭 서버가 계속 실행 중입니다 (port 8000)")
+                    logging.info("💡 윈도우에서 추가 보고서를 생성할 수 있습니다:")
+                    logging.info("   python scripts/generate_ai_report.py")
+                    logging.info("⏹️  종료하려면 Ctrl+C를 누르세요")
+                    logging.info("=" * 60)
+
+                    # 대기 모드 (SIGINT/SIGTERM 수신 시까지)
+                    while not self.should_stop:
+                        await asyncio.sleep(10)
+
+                    logging.info("👋 마스터 종료 중...")
                     break
 
                 await asyncio.sleep(30)  # 30초마다 확인

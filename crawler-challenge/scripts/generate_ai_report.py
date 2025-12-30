@@ -42,6 +42,44 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def validate_metrics(metrics: Dict) -> bool:
+    """메트릭 데이터 유효성 검증
+
+    Args:
+        metrics: 수집된 메트릭 딕셔너리
+
+    Returns:
+        유효하면 True, 아니면 False
+    """
+    data = metrics.get('data', {})
+
+    if not data:
+        logger.error("❌ 메트릭 데이터가 비어있습니다.")
+        return False
+
+    # 필수 메트릭 체크
+    required = [
+        'crawler_tasks_completed',
+        'pg_crawler_stats_total_pages'
+    ]
+
+    missing = [m for m in required if m not in data]
+    if missing:
+        logger.warning(f"⚠️  누락된 필수 메트릭: {missing}")
+        # 경고만 하고 진행 (일부 메트릭은 없을 수도 있음)
+
+    # 데이터 최소값 체크
+    total_pages_data = data.get('pg_crawler_stats_total_pages', {})
+    total_pages = total_pages_data.get('value', 0) if isinstance(total_pages_data, dict) else 0
+
+    if total_pages == 0:
+        logger.warning("⚠️  크롤링된 페이지가 0개입니다. 크롤링이 실행되지 않았을 수 있습니다.")
+        # 경고만 하고 진행
+
+    logger.info(f"✅ 메트릭 유효성 검증 완료 (총 {len(data)}개 메트릭, {total_pages}개 페이지)")
+    return True
+
+
 def get_prometheus_url() -> str:
     """
     실행 환경에 따라 적절한 Prometheus URL 반환
@@ -254,6 +292,39 @@ class MetricsCollector:
                     return value[1]
         return None
 
+    def get_session_time_range(self) -> Optional[Dict]:
+        """크롤링 세션 시작/종료 시간 자동 조회
+
+        Returns:
+            세션 시간 정보 딕셔너리 또는 None
+            {
+                'start': datetime,
+                'end': datetime,
+                'duration_minutes': float
+            }
+        """
+        try:
+            start_result = self.query_instant("crawler_session_start_timestamp")
+            end_result = self.query_instant("crawler_session_end_timestamp")
+
+            if start_result and end_result:
+                start_ts = self._extract_instant_value(start_result)
+                end_ts = self._extract_instant_value(end_result)
+
+                if start_ts and end_ts and start_ts > 0 and end_ts > 0:
+                    duration_minutes = (end_ts - start_ts) / 60
+                    return {
+                        'start': datetime.fromtimestamp(start_ts),
+                        'end': datetime.fromtimestamp(end_ts),
+                        'duration_minutes': duration_minutes,
+                        'start_timestamp': start_ts,
+                        'end_timestamp': end_ts
+                    }
+        except Exception as e:
+            logger.debug(f"세션 시간 조회 실패: {e}")
+
+        return None
+
 
 class TestResultLoader:
     """Pytest 테스트 결과를 로드하는 클래스"""
@@ -307,8 +378,9 @@ class TestResultLoader:
 class GeminiReportGenerator:
     """Gemini API를 사용하여 리포트를 생성하는 클래스"""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, model_name: str = 'gemini-2.5-flash'):
         self.api_key = api_key
+        self.model_name = model_name
         self.model = None
         self._configure()
 
@@ -316,8 +388,8 @@ class GeminiReportGenerator:
         """Gemini API 설정"""
         try:
             genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.5-flash')
-            logger.info("Gemini API 설정 완료")
+            self.model = genai.GenerativeModel(self.model_name)
+            logger.info(f"Gemini API 설정 완료 (모델: {self.model_name})")
         except Exception as e:
             logger.error(f"Gemini API 설정 실패: {e}")
             raise
@@ -332,9 +404,19 @@ class GeminiReportGenerator:
                     prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.3,
-                        max_output_tokens=4096,
+                        max_output_tokens=8192,  # 4096 → 8192 증가
                     )
                 )
+
+                # 응답 완전성 검증
+                if hasattr(response, 'candidates') and response.candidates:
+                    finish_reason = response.candidates[0].finish_reason
+                    # finish_reason: 1=STOP(정상), 2=MAX_TOKENS(잘림), 3=SAFETY, 4=RECITATION, 5=OTHER
+                    if finish_reason != 1:
+                        logger.warning(f"⚠️  응답이 정상적으로 완료되지 않음 (finish_reason: {finish_reason})")
+                        if finish_reason == 2:
+                            logger.warning("   → 응답이 max_output_tokens에 도달하여 잘렸을 수 있습니다.")
+
                 return response.text
             except Exception as e:
                 error_str = str(e)
@@ -511,25 +593,39 @@ class ReportSaver:
             logger.warning(f"이전 리포트 로드 실패: {e}")
             return None
 
-    def save(self, content: str) -> str:
-        """리포트 저장 및 파일 경로 반환"""
+    def save(self, content: str, model_name: str = "Unknown") -> str:
+        """리포트 저장 및 파일 경로 반환 (임시 파일 방식)
+
+        Args:
+            content: 보고서 내용
+            model_name: 사용한 모델명
+
+        Returns:
+            저장된 파일 경로
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         filename = f"report_{timestamp}.md"
-        filepath = self.output_dir / filename
+        temp_filepath = self.output_dir / f"{filename}.tmp"
+        final_filepath = self.output_dir / filename
 
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
+            # 임시 파일에 먼저 저장
+            with open(temp_filepath, 'w', encoding='utf-8') as f:
                 # 메타데이터 헤더 추가
                 f.write(f"---\n")
                 f.write(f"generated_at: {datetime.now().isoformat()}\n")
-                f.write(f"generator: Gemini 1.5 Flash\n")
+                f.write(f"generator: {model_name}\n")
                 f.write(f"---\n\n")
                 f.write(content)
 
-            logger.info(f"리포트 저장 완료: {filepath}")
-            return str(filepath)
+            # 성공 시 최종 파일로 이동
+            temp_filepath.rename(final_filepath)
+            logger.info(f"✅ 리포트 저장 완료: {final_filepath}")
+            return str(final_filepath)
         except Exception as e:
-            logger.error(f"리포트 저장 실패: {e}")
+            logger.error(f"❌ 리포트 저장 실패: {e}")
+            if temp_filepath.exists():
+                logger.info(f"   임시 파일 유지 (디버깅용): {temp_filepath}")
             raise
 
 
@@ -544,8 +640,8 @@ def main():
     parser.add_argument(
         "--time-range",
         type=int,
-        default=60,
-        help="분석할 시간 범위 (분 단위, 기본값: 60)"
+        default=None,
+        help="분석할 시간 범위 (분 단위, 미지정 시 자동 계산)"
     )
     parser.add_argument(
         "--test-report",
@@ -556,6 +652,11 @@ def main():
         "--output-dir",
         default="docs/reports",
         help="리포트 출력 디렉토리"
+    )
+    parser.add_argument(
+        "--model",
+        default="gemini-2.5-flash",
+        help="사용할 Gemini 모델 (기본값: gemini-2.5-flash)"
     )
     args = parser.parse_args()
 
@@ -574,23 +675,47 @@ def main():
     logger.info(f"Prometheus URL: {prometheus_url}")
 
     # 1. Prometheus 메트릭 수집
-    logger.info("[1/4] Prometheus 메트릭 수집 중...")
+    logger.info("[1/5] Prometheus 메트릭 수집 중...")
     collector = MetricsCollector(prometheus_url)
 
-    if collector.connect():
-        metrics = collector.collect_crawler_metrics(args.time_range)
-        logger.info(f"  - 수집된 메트릭 수: {len(metrics.get('data', {}))}")
+    if not collector.connect():
+        logger.error("❌ Prometheus 연결 실패. 보고서를 생성할 수 없습니다.")
+        logger.error(f"   URL: {prometheus_url}")
+        logger.error("   • Prometheus 서버가 실행 중인지 확인하세요")
+        logger.error("   • 네트워크 연결을 확인하세요")
+        logger.error("   • --prometheus-url 인자로 올바른 URL을 지정하세요")
+        sys.exit(1)
+
+    # 자동 시간 범위 계산 시도
+    session_time = collector.get_session_time_range()
+
+    if session_time and not args.time_range:
+        # 자동 계산 성공
+        duration = int(session_time['duration_minutes']) + 5  # 여유 5분
+        logger.info(f"  ✅ 크롤링 시간 자동 계산:")
+        logger.info(f"     시작: {session_time['start'].strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"     종료: {session_time['end'].strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"     범위: {session_time['duration_minutes']:.1f}분 (여유 +5분 = {duration}분)")
+        metrics = collector.collect_crawler_metrics(duration)
     else:
-        logger.warning("  - Prometheus 연결 실패, 빈 메트릭으로 진행")
-        metrics = {
-            "collection_time": datetime.now().isoformat(),
-            "time_range_minutes": args.time_range,
-            "data": {},
-            "note": "Prometheus 서버에 연결할 수 없어 메트릭을 수집하지 못했습니다."
-        }
+        # 수동 지정 또는 fallback
+        time_range = args.time_range if args.time_range else 60
+        if args.time_range:
+            logger.info(f"  ⚙️  수동 시간 범위 사용: {time_range}분")
+        else:
+            logger.info(f"  ⚠️  세션 시간 조회 실패, 기본값 사용: {time_range}분")
+        metrics = collector.collect_crawler_metrics(time_range)
+
+    logger.info(f"  - 수집된 메트릭 수: {len(metrics.get('data', {}))}")
+
+    # 메트릭 유효성 검증
+    if not validate_metrics(metrics):
+        logger.error("❌ 메트릭 데이터가 유효하지 않습니다.")
+        logger.error("   크롤링이 실행되었는지, 시간 범위가 올바른지 확인하세요.")
+        sys.exit(1)
 
     # 2. 테스트 결과 로드
-    logger.info("[2/4] 테스트 결과 로드 중...")
+    logger.info("[2/5] 테스트 결과 로드 중...")
     test_loader = TestResultLoader(args.test_report)
     test_data = test_loader.load()
     test_summary = test_loader.summarize(test_data) if test_data else None
@@ -614,7 +739,7 @@ def main():
     # 4. Gemini 리포트 생성
     logger.info("[4/5] Gemini API로 리포트 생성 중...")
     try:
-        generator = GeminiReportGenerator(api_key)
+        generator = GeminiReportGenerator(api_key, model_name=args.model)
         report_content = generator.generate_report(metrics, test_summary, previous_report)
         logger.info("  - 리포트 생성 완료")
     except Exception as e:
@@ -623,7 +748,7 @@ def main():
 
     # 5. 리포트 저장
     logger.info("[5/5] 리포트 저장 중...")
-    saved_path = saver.save(report_content)
+    saved_path = saver.save(report_content, model_name=generator.model_name)
 
     logger.info("=" * 60)
     logger.info(f"리포트 생성 완료: {saved_path}")
