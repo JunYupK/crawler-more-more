@@ -77,6 +77,16 @@ class MetricsManager:
             ['domain', 'error_type']
         )
 
+        # 13. 크롤링 세션 시작/종료 시간 (Gauge)
+        self.session_start_timestamp = Gauge(
+            'crawler_session_start_timestamp',
+            'Crawling session start time (Unix timestamp)'
+        )
+        self.session_end_timestamp = Gauge(
+            'crawler_session_end_timestamp',
+            'Crawling session end time (Unix timestamp)'
+        )
+
     def start_server(self):
         """Prometheus Exporter 서버 시작"""
         if not self.server_started:
