@@ -54,8 +54,8 @@ class ShardedCrawlerMaster:
         self.tranco_manager: Optional[TrancoManager] = None
         self.progress_tracker: Optional[ProgressTracker] = None
         
-        # [Metric] 2. MetricsManager 초기화 (포트 8000)
-        self.metrics = MetricsManager(port=8000)
+        # [Metric] 2. MetricsManager 초기화 (포트 8000, Master 역할)
+        self.metrics = MetricsManager(port=8000, role='master')
         # 통계
         self.start_time = datetime.now()
 

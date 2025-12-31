@@ -49,6 +49,67 @@
 
 ---
 
+### Grafana 메트릭 변동 문제 해결 (근본 원인 수정)
+
+**문제:**
+- Grafana 대시보드에서 모든 지표가 새로고침할 때마다 계속 변경됨
+- Overview 패널(Master 전용)도 Worker 데이터를 표시하는 문제
+- job 레이블 필터링을 추가해도 문제 지속
+
+**근본 원인 분석:**
+
+1. **Worker 포트 계산 오류 (치명적)**
+   - `sharded_worker.py:125`: `metrics_port = 8001 + worker_id`
+   - Worker ID=1이면 포트 8002가 됨 (8001이어야 함!)
+   - Docker는 8001:8001로 포트 노출 → 실제 Worker는 8002에서 메트릭 서빙
+   - 결과: **Worker 메트릭이 Prometheus에 전혀 수집되지 않음**
+
+   | Worker ID | 예상 포트 | 실제 포트 | Docker 노출 | 결과 |
+   |-----------|----------|----------|------------|------|
+   | 1 | 8001 | 8002 | 8001:8001 | ❌ 불일치 |
+   | 2 | 8002 | 8003 | 8002:8002 | ❌ 불일치 |
+   | ... | ... | ... | ... | ... |
+
+2. **Master가 Worker 전용 메트릭도 노출**
+   - `MetricsManager` 클래스가 생성 시 모든 메트릭을 정의
+   - Master(8000)에서 `crawl_requests_total`, `crawl_errors_total` 등 Worker 전용 메트릭이 값 0으로 노출
+   - Grafana에서 집계 시 Master의 0값과 섞여서 값이 변동
+
+**해결 방법:**
+
+1. **Worker 포트 계산 수정** (`runners/sharded_worker.py:125-126`)
+   ```python
+   # Before: metrics_port = 8001 + worker_id  (worker_id=1 → 8002 ❌)
+   # After:  metrics_port = 8000 + worker_id  (worker_id=1 → 8001 ✅)
+   ```
+
+2. **MetricsManager 역할 기반 분리** (`src/monitoring/metrics.py`)
+   - `role` 파라미터 추가: `'master'` 또는 `'worker'`
+   - Master: 큐 상태, 시스템 리소스 메트릭만 생성
+   - Worker: 크롤링 결과, 에러, 응답 시간 메트릭만 생성
+   - 각 메서드에 역할 체크 추가하여 잘못된 호출 방지
+
+3. **Master/Worker 초기화 수정**
+   - `sharded_master.py`: `MetricsManager(port=8000, role='master')`
+   - `sharded_worker.py`: `MetricsManager(port=metrics_port, role='worker')`
+
+**수정된 파일:**
+1. `src/monitoring/metrics.py` - MetricsManager 역할 기반 분리
+2. `runners/sharded_worker.py` - 포트 계산 수정 및 role='worker' 추가
+3. `runners/sharded_master.py` - role='master' 추가
+
+**결과:**
+- ✅ Worker 메트릭 포트가 Docker 노출 포트와 정확히 일치
+- ✅ Master는 큐/시스템 메트릭만 노출 (Overview 패널용)
+- ✅ Worker는 크롤링 결과 메트릭만 노출 (Worker 분석 패널용)
+- ✅ job 레이블 필터링이 정상 동작하여 메트릭 혼동 방지
+
+**적용 필요 사항:**
+- Docker 이미지 재빌드 필요: `docker-compose build --no-cache`
+- 컨테이너 재시작 필요: `docker-compose up -d`
+
+---
+
 ## 2024-12-28
 
 ### AI 기반 크롤링 리포트 자동화 시스템 개선

@@ -5,87 +5,101 @@ from typing import Optional, List, Dict
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
 
 class MetricsManager:
-    def __init__(self, port=8000):
+    """Prometheus 메트릭 관리자
+
+    Args:
+        port: 메트릭 서버 포트
+        role: 'master' 또는 'worker' - 역할에 따라 필요한 메트릭만 생성
+    """
+    def __init__(self, port=8000, role='master'):
         self.port = port
+        self.role = role
         self.server_started = False
 
-        # 1. 큐 상태 (Gauge: Redis 상태 반영)
-        self.queue_pending = Gauge('crawler_queue_pending', 'Total URLs waiting in queue')
-        self.queue_processing = Gauge('crawler_queue_processing', 'Total URLs currently being processed')
+        # ============================================================
+        # Master 전용 메트릭 (큐 상태, 시스템 리소스)
+        # ============================================================
+        if role == 'master':
+            # 1. 큐 상태 (Gauge: Redis 상태 반영)
+            self.queue_pending = Gauge('crawler_queue_pending', 'Total URLs waiting in queue')
+            self.queue_processing = Gauge('crawler_queue_processing', 'Total URLs currently being processed')
 
-        # 2. 작업 결과 (Counter로 변경 권장, 하지만 마스터가 Redis 값을 덮어쓰는 구조라면 Gauge 유지)
-        self.tasks_completed = Gauge('crawler_tasks_completed_total', 'Total successfully completed tasks')
-        self.tasks_failed = Gauge('crawler_tasks_failed_total', 'Total failed tasks')
+            # 2. 작업 결과 (Counter로 변경 권장, 하지만 마스터가 Redis 값을 덮어쓰는 구조라면 Gauge 유지)
+            self.tasks_completed = Gauge('crawler_tasks_completed_total', 'Total successfully completed tasks')
+            self.tasks_failed = Gauge('crawler_tasks_failed_total', 'Total failed tasks')
 
-        # 3. 상세 에러 카운트 (Counter + Label)
-        self.error_details = Counter('crawler_error_details', 'Detailed error counts by type', ['error_type'])
+            # 3. 상세 에러 카운트 (Counter + Label)
+            self.error_details = Counter('crawler_error_details', 'Detailed error counts by type', ['error_type'])
 
-        # 4. 페이지 처리 시간 분포 (Histogram)
-        self.process_latency = Histogram('crawler_process_latency_seconds', 'Time spent processing a page', buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
+            # 4. 페이지 처리 시간 분포 (Histogram)
+            self.process_latency = Histogram('crawler_process_latency_seconds', 'Time spent processing a page', buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
 
-        # 5. 샤드별 상태 (Labeled Gauge)
-        self.shard_pending = Gauge('crawler_shard_pending', 'Pending tasks per shard', ['shard_id'])
+            # 5. 샤드별 상태 (Labeled Gauge)
+            self.shard_pending = Gauge('crawler_shard_pending', 'Pending tasks per shard', ['shard_id'])
 
-        # 6. 시스템 리소스 (Gauge)
-        self.system_cpu = Gauge('crawler_system_cpu_percent', 'CPU usage percent')
-        self.system_memory = Gauge('crawler_system_memory_percent', 'Memory usage percent')
+            # 6. 시스템 리소스 (Gauge)
+            self.system_cpu = Gauge('crawler_system_cpu_percent', 'CPU usage percent')
+            self.system_memory = Gauge('crawler_system_memory_percent', 'Memory usage percent')
+
+            # 7. 크롤링 세션 시작/종료 시간 (Gauge)
+            self.session_start_timestamp = Gauge(
+                'crawler_session_start_timestamp',
+                'Crawling session start time (Unix timestamp)'
+            )
+            self.session_end_timestamp = Gauge(
+                'crawler_session_end_timestamp',
+                'Crawling session end time (Unix timestamp)'
+            )
 
         # ============================================================
-        # [NEW] 크롤링 에러 모니터링 메트릭
+        # Worker 전용 메트릭 (크롤링 결과, 에러, 응답 시간)
         # ============================================================
+        if role == 'worker':
+            # 1. 워커별 에러 카운터 (에러 타입, 도메인별 분류)
+            self.crawl_errors_total = Counter(
+                'crawl_errors_total',
+                'Total crawl errors by type, worker, and domain',
+                ['worker_id', 'error_type', 'domain']
+            )
 
-        # 7. 워커별 에러 카운터 (에러 타입, 도메인별 분류)
-        self.crawl_errors_total = Counter(
-            'crawl_errors_total',
-            'Total crawl errors by type, worker, and domain',
-            ['worker_id', 'error_type', 'domain']
-        )
+            # 2. 크롤링 요청 총 카운터 (성공/실패)
+            self.crawl_requests_total = Counter(
+                'crawl_requests_total',
+                'Total crawl requests by status',
+                ['worker_id', 'status']  # status: success/failed
+            )
 
-        # 8. 크롤링 요청 총 카운터 (성공/실패)
-        self.crawl_requests_total = Counter(
-            'crawl_requests_total',
-            'Total crawl requests by status',
-            ['worker_id', 'status']  # status: success/failed
-        )
+            # 3. 응답 시간 히스토그램 (성공/실패별)
+            self.crawl_response_time_seconds = Histogram(
+                'crawl_response_time_seconds',
+                'Crawl response time distribution',
+                ['worker_id', 'success'],
+                buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]
+            )
 
-        # 9. 응답 시간 히스토그램 (성공/실패별)
-        self.crawl_response_time_seconds = Histogram(
-            'crawl_response_time_seconds',
-            'Crawl response time distribution',
-            ['worker_id', 'success'],
-            buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]
-        )
+            # 4. HTTP 상태 코드 카운터
+            self.crawl_http_status_total = Counter(
+                'crawl_http_status_total',
+                'HTTP status codes by worker and domain',
+                ['worker_id', 'status_code', 'domain']
+            )
 
-        # 10. HTTP 상태 코드 카운터
-        self.crawl_http_status_total = Counter(
-            'crawl_http_status_total',
-            'HTTP status codes by worker and domain',
-            ['worker_id', 'status_code', 'domain']
-        )
+            # 5. 성공률 게이지 (워커별)
+            self.crawl_success_rate = Gauge(
+                'crawl_success_rate',
+                'Current success rate percentage by worker',
+                ['worker_id']
+            )
 
-        # 11. 성공률 게이지 (워커별)
-        self.crawl_success_rate = Gauge(
-            'crawl_success_rate',
-            'Current success rate percentage by worker',
-            ['worker_id']
-        )
+            # 6. 도메인별 실패 카운터
+            self.domain_failures_total = Counter(
+                'domain_failures_total',
+                'Total failures by domain',
+                ['domain', 'error_type']
+            )
 
-        # 12. 도메인별 실패 카운터
-        self.domain_failures_total = Counter(
-            'domain_failures_total',
-            'Total failures by domain',
-            ['domain', 'error_type']
-        )
-
-        # 13. 크롤링 세션 시작/종료 시간 (Gauge)
-        self.session_start_timestamp = Gauge(
-            'crawler_session_start_timestamp',
-            'Crawling session start time (Unix timestamp)'
-        )
-        self.session_end_timestamp = Gauge(
-            'crawler_session_end_timestamp',
-            'Crawling session end time (Unix timestamp)'
-        )
+            # 7. 상세 에러 카운트 (Counter + Label) - Worker에서도 사용
+            self.error_details = Counter('crawler_error_details_worker', 'Detailed error counts by type from workers', ['error_type'])
 
     def start_server(self):
         """Prometheus Exporter 서버 시작"""
@@ -98,7 +112,10 @@ class MetricsManager:
                 print(f"[Metrics] Failed to start server: {e}")
 
     def update_queue_stats(self, stats: dict):
-        """Master가 조회한 queue_stats 딕셔너리를 받아 메트릭 갱신"""
+        """Master가 조회한 queue_stats 딕셔너리를 받아 메트릭 갱신 (Master 전용)"""
+        if self.role != 'master':
+            return  # Master가 아니면 무시
+
         self.queue_pending.set(stats.get('total_pending', 0))
         self.queue_processing.set(stats.get('processing', 0))
         self.tasks_completed.set(stats.get('completed', 0))
@@ -109,21 +126,25 @@ class MetricsManager:
                 shard_id = str(shard.get('shard_id', 'unknown'))
                 pending = shard.get('total_pending', 0)
                 self.shard_pending.labels(shard_id=shard_id).set(pending)
-        
+
         # 시스템 리소스도 같이 업데이트
         self.update_system_metrics()
 
     def update_system_metrics(self):
-        """CPU 및 메모리 사용량 갱신"""
+        """CPU 및 메모리 사용량 갱신 (Master 전용)"""
+        if self.role != 'master':
+            return  # Master가 아니면 무시
+
         self.system_cpu.set(psutil.cpu_percent())
         self.system_memory.set(psutil.virtual_memory().percent)
 
     def inc_error(self, error_type='unknown'):
         """특정 에러 타입 카운트 증가"""
-        self.error_details.labels(error_type=error_type).inc()
+        if hasattr(self, 'error_details'):
+            self.error_details.labels(error_type=error_type).inc()
 
     def record_crawl_result(self, worker_id: int, result: Dict):
-        """크롤링 결과를 Prometheus 메트릭으로 기록
+        """크롤링 결과를 Prometheus 메트릭으로 기록 (Worker 전용)
 
         Args:
             worker_id: 워커 ID
@@ -135,6 +156,9 @@ class MetricsManager:
                 - status_code: int (optional)
                 - response_time: float (optional)
         """
+        if self.role != 'worker':
+            return  # Worker가 아니면 무시
+
         worker_str = str(worker_id)
         success = result.get('success', False)
         domain = result.get('domain', 'unknown')
@@ -169,7 +193,8 @@ class MetricsManager:
             ).inc()
 
             # 기존 에러 카운터도 업데이트 (하위 호환성)
-            self.error_details.labels(error_type=error_type).inc()
+            if hasattr(self, 'error_details'):
+                self.error_details.labels(error_type=error_type).inc()
 
         # 4. HTTP 상태 코드 기록
         status_code = result.get('status_code')
@@ -181,12 +206,15 @@ class MetricsManager:
             ).inc()
 
     def update_success_rate(self, worker_id: int, success_rate: float):
-        """워커별 성공률 업데이트
+        """워커별 성공률 업데이트 (Worker 전용)
 
         Args:
             worker_id: 워커 ID
             success_rate: 성공률 (0.0 ~ 100.0)
         """
+        if self.role != 'worker':
+            return  # Worker가 아니면 무시
+
         self.crawl_success_rate.labels(worker_id=str(worker_id)).set(success_rate)
                 
 class MetricsMonitor:

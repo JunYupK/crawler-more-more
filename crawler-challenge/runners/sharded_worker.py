@@ -121,9 +121,10 @@ class ShardedCrawlerWorker:
         self.queue_manager = ShardedRedisQueueManager(shard_configs)
         self.db_manager = DatabaseManager(host=postgres_host)
 
-        # Prometheus 메트릭 (워커별 포트: 8001 + worker_id)
-        metrics_port = 8001 + worker_id
-        self.metrics = MetricsManager(port=metrics_port)
+        # Prometheus 메트릭 (워커별 포트: 8000 + worker_id, Worker 역할)
+        # worker_id=1 → 8001, worker_id=2 → 8002, ...
+        metrics_port = 8000 + worker_id
+        self.metrics = MetricsManager(port=metrics_port, role='worker')
 
         # 통계
         self.total_processed = 0
