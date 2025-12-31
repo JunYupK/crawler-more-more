@@ -1,5 +1,54 @@
 # 작업 이력
 
+## 2025-12-31
+
+### Grafana 대시보드 메트릭 수집 문제 해결
+
+**문제:**
+- Grafana 대시보드에서 워커별 크롤링 메트릭 패널들이 "No Data"로 표시됨
+- 영향받은 패널: Processing Throughput, Error Type Distribution, Success Rate by Worker, HTTP Status Codes, Response Time Heatmap, Top Failing Domains
+
+**원인 분석:**
+1. `sharded_worker.py`에서 `record_crawl_result()` 메서드는 정상 호출되고 있음 ✅
+2. 워커들이 각각 다른 포트(8001-8008)에서 메트릭을 노출하지만, Prometheus가 이 포트들을 스크래핑하지 않았음 ❌
+3. `docker-compose.yml`에서 워커들의 메트릭 포트가 호스트로 노출되지 않음 ❌
+
+**해결 과정:**
+
+1. **코드 분석 (runners/sharded_worker.py)**
+   - 212-218줄: 크롤링 성공 시 메트릭 기록 확인
+   - 275-282줄: 크롤링 실패 시 메트릭 기록 확인
+   - 294-296줄: 워커별 성공률 업데이트 확인
+   - domain, error_type, status_code, response_time 모두 정상 수집 중
+
+2. **Prometheus 설정 수정 (c:\Users\top15\Desktop\api\prometheus.yml)**
+   - 기존 `crawler_macbook` job → `crawler_master` job으로 이름 변경
+   - 신규 `crawler_workers` job 추가: 워커 8개 포트(8001-8008) 스크래핑 설정
+   - 맥북 IP(100.125.119.99)의 8001-8008 포트 타겟 추가
+
+3. **Docker Compose 설정 수정 (crawler-challenge/docker-compose.yml)**
+   - 모든 워커(1-8)에 `ports` 섹션 추가
+   - 각 워커의 메트릭 포트를 호스트로 노출 (8001:8001, 8002:8002, ...)
+
+4. **Prometheus/Grafana Docker 관리 시스템 구축**
+   - Windows 데스크톱에서 Prometheus를 Docker로 관리하도록 변경
+   - `c:\Users\top15\Desktop\api\docker-compose.yml` 생성
+   - Prometheus와 Grafana를 함께 관리하는 구성
+   - 설정 리로드, 데이터 보관 기간(30일) 등 운영 편의성 개선
+
+**결과:**
+- ✅ 워커별 메트릭 포트(8001-8008) Prometheus 스크래핑 설정 완료
+- ✅ Docker에서 워커 포트를 호스트로 노출하여 원격 접근 가능
+- ✅ Prometheus/Grafana Docker Compose로 관리 편의성 향상
+- ✅ 23개의 크롤링 메트릭이 정상적으로 수집되어 Grafana에서 시각화 가능
+
+**수정된 파일:**
+1. `c:\Users\top15\Desktop\api\prometheus.yml` - 워커 타겟 추가
+2. `c:\Users\top15\Desktop\api\docker-compose.yml` - Prometheus/Grafana Docker 설정 신규 생성
+3. `crawler-challenge/docker-compose.yml` - 워커 8개의 메트릭 포트 노출
+
+---
+
 ## 2024-12-28
 
 ### AI 기반 크롤링 리포트 자동화 시스템 개선
