@@ -110,6 +110,60 @@
 
 ---
 
+### Grafana 대시보드 데이터소스 문제 해결
+
+**문제:**
+- 모든 코드 수정 및 Docker 재빌드 후에도 Grafana 패널 값이 계속 랜덤하게 변동
+- 패널 Edit 시 Query type이 "Random Walk"로 표시됨
+- Prometheus 쿼리 입력창이 보이지 않음
+
+**원인:**
+- Grafana 대시보드 JSON 파일에 데이터소스(datasource) 설정이 누락됨
+- Import 시 Grafana가 기본 데이터소스인 **TestData (Random Walk)**를 사용
+- Random Walk는 테스트용 가짜 데이터로, 값이 랜덤하게 생성됨
+
+**해결 방법:**
+1. Grafana API로 실제 Prometheus 데이터소스 UID 확인: `ff8rd0a0vyrr4d`
+2. Python 스크립트로 모든 패널(20개)에 Prometheus 데이터소스 추가
+3. 수정된 JSON 파일 생성: `Crawler_Dashboard_V4_Fixed.json`
+
+**수정 내용:**
+```json
+// 각 패널과 target에 추가
+"datasource": {
+  "type": "prometheus",
+  "uid": "ff8rd0a0vyrr4d"
+}
+```
+
+**결과:**
+- ✅ 모든 패널이 Prometheus 데이터소스를 사용하도록 수정
+- ✅ Random Walk 대신 실제 크롤러 메트릭 표시
+- ✅ Overview 패널: Master 메트릭만 표시 (Queue Pending, Tasks Completed 등)
+- ✅ Worker 분석 패널: Worker 메트릭만 표시 (Success Rate, Error Distribution 등)
+- ✅ 값이 안정적으로 표시되며 새로고침 시 변동 없음
+
+**생성된 파일:**
+- `c:\Users\top15\Downloads\Crawler_Dashboard_V4_Fixed.json` - 데이터소스가 추가된 최종 대시보드
+
+---
+
+### 2025-12-31 작업 요약
+
+| 순서 | 문제 | 원인 | 해결 |
+|------|------|------|------|
+| 1 | Worker 메트릭 "No Data" | Prometheus가 Worker 포트 미스크래핑 | prometheus.yml에 crawler_workers job 추가 |
+| 2 | Docker 포트 미노출 | docker-compose.yml 포트 설정 누락 | 워커 8개 포트(8001-8008) 노출 추가 |
+| 3 | 메트릭 값 계속 변동 | Worker 포트 계산 오류 (8001+id → 8002) | 8000+id로 수정 |
+| 4 | Master/Worker 메트릭 혼동 | MetricsManager가 모든 메트릭 생성 | role 파라미터로 역할별 분리 |
+| 5 | Random Walk 표시 | JSON에 datasource 설정 누락 | Prometheus datasource 일괄 추가 |
+
+**커밋 내역:**
+1. `75605c3` - fix(monitoring): Grafana 메트릭 수집 문제 해결 - 워커 포트 노출
+2. `6fef659` - fix(metrics): Worker 포트 계산 오류 및 메트릭 분리 수정
+
+---
+
 ## 2024-12-28
 
 ### AI 기반 크롤링 리포트 자동화 시스템 개선
