@@ -1,1384 +1,351 @@
-## 🚀 Phase 10: GitHub Actions CI/CD 파이프라인 구축 (2025-11-13)
-
-**완전 자동화된 빌드, 테스트, 배포 파이프라인**
-
-### 🎯 CI/CD 목표
-
-개발부터 프로덕션 배포까지 **완전 자동화**:
-- ✅ 코드 품질 자동 검증 (Linting, Security Scan)
-- ✅ Docker 이미지 자동 빌드 & 푸시 (ghcr.io)
-- ✅ K8s 자동 배포 (Staging/Production)
-- ✅ PR 자동화 (검증, 라벨링, 리뷰)
-- ✅ 릴리즈 자동화 (Changelog, Assets)
-
-### 🏗️ CI/CD 아키텍처
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                  GitHub Repository                       │
-│                                                          │
-│  Code Push → CI Test → Docker Build → K8s Deploy       │
-│      ↓           ↓            ↓             ↓           │
-│   Lint      Security    ghcr.io      Staging/Prod      │
-│   Test        Scan      Registry       K8s Cluster      │
-└─────────────────────────────────────────────────────────┘
-```
-
-### 📦 구현된 Workflows
-
-#### 1. **CI - Code Quality & Tests** (`ci.yml`)
-
-**자동 실행:** 모든 push, PR 생성 시
-
-```yaml
-트리거: push to main/develop/claude/**, PR
-```
-
-**검증 항목:**
-- Python 문법 검사 (Flake8)
-- Import 유효성 검증
-- 코드 복잡도 분석 (Radon)
-- 보안 취약점 스캔 (Bandit)
-- Docker 빌드 검증
-
-**실행 시간:** ~2-3분
-
-#### 2. **Docker Build & Push** (`docker-build.yml`)
-
-**자동 실행:** main 브랜치 머지, 태그 push 시
-
-```yaml
-트리거: push to main, tags v*.*.*
-```
-
-**주요 기능:**
-- Multi-stage Docker 빌드
-- GitHub Container Registry 푸시
-- 자동 태그 관리:
-  - `latest` (main 브랜치)
-  - `v1.2.3` (semantic version)
-  - `main-abc123` (git SHA)
-- SBOM 생성 (Software Bill of Materials)
-- Trivy 보안 스캔
-
-**생성 이미지:**
-```
-ghcr.io/<username>/crawler-more-more/crawler:latest
-ghcr.io/<username>/crawler-more-more/crawler:v1.0.0
-```
-
-**실행 시간:** ~5-7분
-
-#### 3. **K8s Auto Deploy** (`deploy-k8s.yml`)
-
-**자동 실행:** Docker 빌드 완료 시 (Staging)
-**수동 실행:** Production 배포
-
-```yaml
-트리거: workflow_dispatch, Docker 빌드 완료
-```
-
-**배포 프로세스:**
-1. kubectl 설정
-2. Deployment 이미지 업데이트
-3. Rollout 상태 모니터링 (5분 타임아웃)
-4. Pod Health 검증
-5. Smoke 테스트 (Redis, PostgreSQL)
-6. 실패 시 자동 Rollback
-
-**배포 환경:**
-- **Staging**: 자동 배포 (main 머지 시)
-- **Production**: 수동 승인 필요
-
-**실행 시간:** ~3-5분
-
-#### 4. **PR Automation** (`pr-automation.yml`)
-
-**자동 실행:** PR 생성/업데이트 시
-
-```yaml
-트리거: PR opened/synchronize/reopened
-```
-
-**자동화 기능:**
-- PR 제목 형식 검증 (Conventional Commits)
-- PR 크기 체크 (50+ 파일 경고)
-- Merge conflict 감지
-- 자동 코드 리뷰 (복잡도 분석)
-- 성능 영향 체크
-- 자동 라벨링 (ci/cd, kubernetes, docker 등)
-
-**PR 제목 형식:**
-```
-feat: add new feature
-fix(crawler): resolve timeout
-docs: update guide
-```
-
-**실행 시간:** ~1-2분
-
-#### 5. **Release Automation** (`release.yml`)
-
-**자동 실행:** 버전 태그 push 시
-
-```yaml
-트리거: tags v*.*.*
-```
-
-**자동 생성:**
-- GitHub Release
-- Changelog (Features, Fixes, Docs 분류)
-- Release Assets:
-  - `k8s-manifests-v1.0.0.tar.gz`
-  - `crawler-source-v1.0.0.tar.gz`
-  - `checksums.txt` (SHA256)
-
-**Changelog 예시:**
-```markdown
-## 🚀 What's New in v1.0.0
-
-### ✨ Features
-- feat: add KEDA autoscaling (abc123)
-
-### 🐛 Bug Fixes
-- fix(crawler): resolve timeout (def456)
-```
-
-**실행 시간:** ~2-3분
-
-### 🔄 CI/CD 워크플로우
-
-#### 개발 → 배포 전체 흐름
-
-```
-1. Feature 개발
-   git checkout -b feat/new-feature
-   git commit -m "feat: add new optimization"
-   git push
-   ↓
-2. CI 자동 실행
-   - 코드 린팅
-   - 보안 스캔
-   - Docker 빌드 검증
-   ↓
-3. PR 생성
-   - 자동 검증 (제목, 크기, conflict)
-   - 자동 라벨링
-   - 코드 리뷰 코멘트
-   ↓
-4. PR 승인 & Merge to main
-   ↓
-5. Docker 이미지 빌드
-   - ghcr.io에 자동 푸시
-   - latest + SHA 태그 생성
-   - 보안 스캔
-   ↓
-6. Staging 자동 배포
-   - K8s Deployment 업데이트
-   - Health 체크
-   - Smoke 테스트
-   ↓
-7. Production 수동 배포
-   - GitHub UI에서 승인
-   - 동일한 이미지로 배포
-   - Grafana 모니터링
-```
-
-#### 릴리즈 프로세스
-
-```
-1. 릴리즈 준비
-   git tag -a v1.0.0 -m "Release v1.0.0"
-   git push origin v1.0.0
-   ↓
-2. Release Workflow 자동 실행
-   - Changelog 생성
-   - GitHub Release 생성
-   - Assets 빌드 & 업로드
-   ↓
-3. Docker 이미지 빌드
-   - v1.0.0 태그로 빌드
-   - ghcr.io에 푸시
-   ↓
-4. Production 배포 (수동)
-   Actions > Deploy > Run
-   Environment: production
-   Image tag: v1.0.0
-```
-
-### 📁 CI/CD 구조
-
-```
-.github/
-├── workflows/
-│   ├── ci.yml                  # CI 테스트
-│   ├── docker-build.yml        # Docker 빌드
-│   ├── deploy-k8s.yml          # K8s 배포
-│   ├── pr-automation.yml       # PR 자동화
-│   └── release.yml             # 릴리즈 자동화
-└── CI_CD.md                    # 상세 가이드
-```
-
-### ⚙️ 필수 설정
-
-#### GitHub Secrets
-
-| Secret | 설명 | 생성 방법 |
-|--------|------|----------|
-| `KUBE_CONFIG` | K8s 클러스터 접근 | `cat ~/.kube/config \| base64` |
-
-#### GitHub Environments
-
-**Production 환경 보호:**
-- Required reviewers: 1명 이상
-- Wait timer: 5분
-- Branch protection: main only
-
-### 🎯 주요 기능
-
-#### 1. **코드 품질 보증**
-
-```yaml
-Flake8 린팅 → Complexity 분석 → Security 스캔
-```
-
-**검출 항목:**
-- 문법 오류 (E9, F63, F7, F82)
-- 복잡도 (Cyclomatic Complexity > 10)
-- 보안 취약점 (SQL injection, hardcoded secrets 등)
-
-#### 2. **자동 Docker 이미지 관리**
-
-**태그 전략:**
-```
-main 브랜치:
-  → latest
-  → main-abc1234 (git SHA)
-
-v1.0.0 태그:
-  → v1.0.0
-  → v1.0 (major.minor)
-  → v1 (major)
-```
-
-**빌드 캐시:**
-- GitHub Actions Cache 활용
-- 빌드 시간 50% 단축 (5분 → 2.5분)
-
-#### 3. **안전한 배포**
-
-**Blue-Green 배포:**
-```yaml
-strategy:
-  rollingUpdate:
-    maxSurge: 1        # 새 Pod 먼저 생성
-    maxUnavailable: 0  # 다운타임 제로
-```
-
-**자동 Rollback:**
-```yaml
-실패 감지 → kubectl rollout undo → 이전 버전 복구
-```
-
-**검증 단계:**
-1. Pod 상태 확인 (Running)
-2. Readiness Probe 통과
-3. Redis/PostgreSQL 연결 테스트
-4. 5분간 모니터링
-
-#### 4. **PR 품질 관리**
-
-**Conventional Commits 강제:**
-```
-✅ feat: add feature
-✅ fix(scope): bug fix
-❌ Update file (거부)
-```
-
-**자동 라벨링:**
-- 파일 경로 기반 라벨 자동 추가
-- 리뷰어 할당 자동화 (CODEOWNERS)
-
-### 📊 CI/CD 메트릭
-
-#### Workflow 실행 통계
-
-| Workflow | 평균 시간 | 성공률 | 트리거 빈도 |
-|----------|----------|--------|-----------|
-| CI | 2-3분 | 95%+ | 모든 push |
-| Docker Build | 5-7분 | 98%+ | main 머지 |
-| K8s Deploy | 3-5분 | 99%+ | 수동/자동 |
-| PR Automation | 1-2분 | 100% | 모든 PR |
-| Release | 2-3분 | 100% | 태그 push |
-
-#### 배포 빈도 목표
-
-| 환경 | 배포 빈도 | 자동화 수준 |
-|------|----------|-----------|
-| Staging | 하루 10+ 회 | 100% 자동 |
-| Production | 주 2-3회 | 수동 승인 |
-
-### 🚀 빠른 시작
-
-#### 1. Secrets 설정
-
-```bash
-# 1. kubeconfig 생성
-cat ~/.kube/config | base64 -w 0 > kubeconfig.b64
-
-# 2. GitHub에 등록
-# Settings > Secrets > New secret
-# Name: KUBE_CONFIG
-# Value: <kubeconfig.b64 내용>
-```
-
-#### 2. 첫 배포
-
-```bash
-# 1. 코드 커밋
-git add .
-git commit -m "feat: initial deployment"
-git push origin main
-
-# 2. CI 자동 실행 확인
-# Actions 탭에서 workflow 상태 확인
-
-# 3. Docker 이미지 자동 빌드
-# ghcr.io에서 이미지 확인
-
-# 4. Staging 자동 배포
-# K8s 클러스터에서 Pod 확인
-kubectl get pods -n crawler
-
-# 5. Production 수동 배포
-# Actions > Deploy to Kubernetes > Run workflow
-```
-
-#### 3. 릴리즈 생성
-
-```bash
-# 1. 태그 생성
-git tag -a v1.0.0 -m "Release v1.0.0: Initial production release"
-git push origin v1.0.0
-
-# 2. Release 자동 생성 확인
-# Releases 탭에서 v1.0.0 확인
-
-# 3. Docker 이미지 v1.0.0 확인
-# ghcr.io/<username>/crawler-more-more/crawler:v1.0.0
-```
-
-### 🎨 Workflow Badges
-
-README에 추가할 수 있는 상태 배지:
-
-```markdown
-![CI](https://github.com/<username>/crawler-more-more/workflows/CI/badge.svg)
-![Docker](https://github.com/<username>/crawler-more-more/workflows/Docker%20Build%20&%20Push/badge.svg)
-![Deploy](https://github.com/<username>/crawler-more-more/workflows/Deploy%20to%20Kubernetes/badge.svg)
-```
-
-### 💡 Best Practices
-
-**1. 브랜치 전략**
-```
-main (프로덕션)
-  └── develop (통합)
-       ├── feat/* (기능)
-       └── fix/* (버그 수정)
-```
-
-**2. 커밋 메시지**
-- Conventional Commits 준수
-- Scope 명시 (선택적)
-- Body에 변경 이유 설명
-
-**3. 배포 전략**
-- Staging에서 충분히 테스트
-- Production은 수동 승인
-- Rollback 계획 수립
-
-**4. 모니터링**
-- Grafana로 배포 영향 추적
-- Prometheus Alerts 설정
-- Slack/Discord 알림 연동
-
-### 🔒 보안
-
-**Docker 이미지:**
-- ✅ Trivy 보안 스캔 (High/Critical 취약점 감지)
-- ✅ SBOM 생성 (의존성 추적)
-- ✅ Non-root user 실행
-- ✅ Multi-stage build (최소 이미지)
-
-**K8s 배포:**
-- ✅ Secret으로 민감 정보 관리
-- ✅ RBAC 최소 권한
-- ✅ NetworkPolicy (선택적)
-
-**GitHub:**
-- ✅ Branch protection (main, develop)
-- ✅ Required reviews
-- ✅ Status checks 필수
-
-### 📚 추가 리소스
-
-- **상세 가이드**: `.github/CI_CD.md`
-- **Troubleshooting**: CI_CD.md의 트러블슈팅 섹션
-- **GitHub Actions 문서**: https://docs.github.com/actions
-- **Conventional Commits**: https://www.conventionalcommits.org/
-
-### 🎯 다음 단계
-
-Phase 10 완료 후 고려 사항:
-
-- [ ] **Cost Optimization**: AWS Spot Instances 활용
-- [ ] **Multi-Region**: 지오 분산 크롤링
-- [ ] **Advanced Monitoring**: APM, Tracing 추가
-- [ ] **ChatOps**: Slack 봇 통한 배포 관리
-
-**상세 배포 가이드**: `.github/CI_CD.md` 참조
+<a id="readme-top"></a>
+
+<!-- PROJECT SHIELDS -->
+<div align="center">
+
+[![Python](https://img.shields.io/badge/Python-3.10-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Redis](https://img.shields.io/badge/Redis-7.0-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
+[![Prometheus](https://img.shields.io/badge/Prometheus-Monitoring-E6522C?style=for-the-badge&logo=prometheus&logoColor=white)](https://prometheus.io)
+
+</div>
+
+<!-- PROJECT TITLE -->
+<div align="center">
+  <h1>🕷️ Distributed Sharded Crawler</h1>
+  <p>
+    <strong>M2 MacBook 8GB로 Tranco Top 1M 크롤링하기</strong>
+  </p>
+  <p>
+    관측 가능하고(Observable) · 확장 가능하며(Scalable) · 자동화된(Automated) 분산 크롤링 시스템
+  </p>
+
+  <a href="./crawler-challenge/docs/10k_crawling_report.md">📊 성능 보고서</a>
+  ·
+  <a href="./crawler-challenge/docs/TEST_REPORT.md">🧪 테스트 보고서</a>
+  ·
+  <a href="#quick-start">🚀 Quick Start</a>
+</div>
 
 ---
 
-## 📊 Phase 9: Prometheus & Grafana 모니터링 구축 (2025-11-13)
+<!-- TABLE OF CONTENTS -->
+<details>
+  <summary>📑 Table of Contents</summary>
+  <ol>
+    <li><a href="#features">Features</a></li>
+    <li><a href="#quick-start">Quick Start</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#redis-sharding">Redis Sharding</a></li>
+    <li><a href="#monitoring">Monitoring</a></li>
+    <li><a href="#cicd">CI/CD</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+    <li><a href="#project-structure">Project Structure</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+  </ol>
+</details>
 
-**실시간 메트릭 수집 및 시각화 대시보드 구축**
+---
 
-### 🎯 모니터링 목표
+## Features
 
-K8s 크롤러의 **가시성 확보** 및 **성능 최적화**:
-- ✅ 실시간 메트릭 수집 (Prometheus)
-- ✅ 직관적 시각화 대시보드 (Grafana)
-- ✅ DB 및 큐 상태 모니터링
-- ✅ 자동 알림 및 이상 감지
+✨ **분산 크롤링** — Master-Worker 패턴으로 Worker 수를 자유롭게 조절
 
-### 🏗️ 모니터링 아키텍처
+⚡ **3-Shard Redis Queue** — 랜덤 샤딩으로 균등 부하 분배
 
-```
-┌───────────────────────────────────────────────┐
-│         Grafana Dashboard (Port 3000)          │
-│   • Crawler Performance                        │
-│   • Queue Monitoring                           │
-│   • Resource Usage                             │
-└────────────────┬──────────────────────────────┘
-                 │
-┌────────────────▼──────────────────────────────┐
-│       Prometheus (Port 9090)                   │
-│   • 15s scrape interval                        │
-│   • 15 days retention                          │
-│   • PromQL queries                             │
-└──┬────────┬──────────┬────────────┬───────────┘
-   │        │          │            │
-   ▼        ▼          ▼            ▼
-┌──────┐ ┌──────┐ ┌────────┐ ┌──────────┐
-│Crawler│ │Redis │ │Postgres│ │K8s API   │
-│Workers│ │Export│ │Exporter│ │Server    │
-└──────┘ └──────┘ └────────┘ └──────────┘
-```
+📈 **실시간 모니터링** — Prometheus + Grafana 기반 23개 커스텀 메트릭
 
-### 📊 수집 메트릭
+🛡️ **DLQ 시스템** — 에러 데이터 격리로 무한 롤백 방지
 
-#### 1. **크롤러 워커 메트릭**
-- CPU 사용률 (Pod별, 전체)
-- 메모리 사용량 (Pod별, 전체)
-- 네트워크 트래픽 (RX/TX)
-- Pod 재시작 횟수
+🤖 **AI 리포트** — Gemini API 연동 자동 성능 분석
 
-#### 2. **큐 메트릭 (Redis)**
-- 큐 길이 (Priority별)
-- 처리 속도 (items/sec)
-- 메모리 사용량
-- 커넥션 수
+🔄 **CI/CD 파이프라인** — GitHub Actions 4개 워크플로우
 
-#### 3. **데이터베이스 메트릭 (PostgreSQL)**
-- Active 커넥션 수
-- 트랜잭션 속도
-- 데이터베이스 크기
-- 쿼리 성능
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-#### 4. **K8s 클러스터 메트릭**
-- 노드 리소스 사용률
-- Pod 상태 및 Health
-- PVC 사용량
+---
 
-### 📈 주요 PromQL 쿼리
+## Quick Start
 
-```promql
-# 워커 Pod 수
-count(kube_pod_status_phase{namespace="crawler", pod=~"crawler-worker.*", phase="Running"})
-
-# 총 CPU 사용량
-sum(rate(container_cpu_usage_seconds_total{namespace="crawler"}[5m]))
-
-# 총 큐 길이
-redis_list_length{list="queue_priority_high"} +
-redis_list_length{list="queue_priority_medium"} +
-redis_list_length{list="queue_priority_normal"}
-
-# DB 커넥션 수
-pg_stat_activity_count
-```
-
-### 🚀 빠른 배포
+### 1. 인프라 실행
 
 ```bash
-cd k8s/monitoring
-
-# 1. Prometheus 배포
-kubectl apply -f prometheus/prometheus-configmap.yaml
-kubectl apply -f prometheus/prometheus-deployment.yaml
-
-# 2. Grafana 배포
-kubectl apply -f grafana/grafana-configmap.yaml
-kubectl apply -f grafana/grafana-deployment.yaml
-kubectl apply -f grafana/crawler-dashboard-configmap.yaml
-
-# 3. Exporters 배포
-kubectl apply -f exporters.yaml
-
-# 4. (옵션) Ingress 배포
-kubectl apply -f ingress.yaml
-
-# 5. 접근
-kubectl port-forward -n crawler svc/grafana 3000:3000
-# http://localhost:3000 (admin/admin)
+docker-compose up -d redis postgres
 ```
 
-### 📁 모니터링 스택 구조
-
-```
-k8s/monitoring/
-├── prometheus/
-│   ├── prometheus-configmap.yaml      # Prometheus 설정
-│   └── prometheus-deployment.yaml     # Prometheus + RBAC
-├── grafana/
-│   ├── grafana-configmap.yaml        # Datasource + 설정
-│   ├── grafana-deployment.yaml       # Grafana + PVC
-│   ├── crawler-dashboard.json        # 크롤러 대시보드
-│   └── crawler-dashboard-configmap.yaml
-├── exporters.yaml                     # PostgreSQL + Redis Exporter
-├── ingress.yaml                      # 외부 접근용 Ingress
-└── MONITORING.md                     # 상세 가이드
-```
-
-### 📦 리소스 사용량
-
-| 컴포넌트 | CPU | 메모리 | 스토리지 |
-|---------|-----|--------|----------|
-| **Prometheus** | 500m-2 CPU | 1-4GB | 10GB PVC |
-| **Grafana** | 250m-1 CPU | 512MB-2GB | 5GB PVC |
-| **PostgreSQL Exporter** | 100m-500m | 128-512MB | - |
-| **Redis Exporter** | 100m-500m | 128-512MB | - |
-| **총합** | ~1-4 CPU | ~2-7GB | 15GB |
-
-### 🎨 Grafana 대시보드
-
-**사전 구성된 패널:**
-
-1. **개요 (Top Row)**
-   - Running Worker Pods: 현재 실행 중인 워커 수
-   - Total CPU Usage: 전체 CPU 사용량
-   - Total Memory Usage: 전체 메모리 사용량
-   - Redis Queue Length: 대기 중인 URL 수
-
-2. **리소스 모니터링**
-   - CPU Usage per Pod: Pod별 CPU 그래프
-   - Memory Usage per Pod: Pod별 메모리 그래프
-
-3. **큐 모니터링**
-   - Queue Lengths by Priority: 우선순위별 큐 길이
-   - Processing Rate: URL 처리 속도
-
-4. **데이터베이스**
-   - PostgreSQL Connections: 활성 커넥션
-   - Transaction Rate: 트랜잭션 속도
-
-5. **네트워크 & 안정성**
-   - Network Traffic: 네트워크 사용량
-   - Pod Restarts: Pod 재시작 추적
-
-### 🔔 알림 설정 (선택사항)
-
-Prometheus Alert Rules 예시:
-
-```yaml
-groups:
-  - name: crawler_alerts
-    rules:
-      - alert: HighQueueLength
-        expr: redis_list_length > 1000
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "큐 길이가 너무 높습니다"
-
-      - alert: HighMemoryUsage
-        expr: container_memory_working_set_bytes > 7516192768
-        for: 10m
-        labels:
-          severity: critical
-        annotations:
-          summary: "메모리 사용량이 임계값을 초과했습니다"
-```
-
-### 💡 모니터링 활용
-
-**1. 성능 튜닝**
-- CPU/메모리 사용 패턴 분석
-- 병목 지점 식별
-- 리소스 할당 최적화
-
-**2. 자동 스케일링 검증**
-- KEDA 스케일링 효과 측정
-- 큐 길이와 워커 수 상관관계
-- 비용 효율성 분석
-
-**3. 이상 감지**
-- 비정상적인 메모리 증가
-- Pod 재시작 패턴
-- 네트워크 이상
-
-**4. 용량 계획**
-- 리소스 사용 추세 분석
-- 피크 타임 대비
-- 인프라 확장 계획
-
-### 📚 추가 리소스
-
-- **배포 가이드**: `k8s/monitoring/MONITORING.md`
-- **Prometheus 문서**: https://prometheus.io/docs/
-- **Grafana 문서**: https://grafana.com/docs/
-- **PromQL 치트시트**: https://promlabs.com/promql-cheat-sheet/
-
-**기본 접속 정보:**
-- Grafana: `admin / admin` (변경 필요!)
-- Prometheus: 인증 없음 (Ingress로 보호 권장)
-
----
-
-## 🚢 Phase 8: Kubernetes 배포 - 무한 확장 가능한 크롤러 (2025-11-13)
-
-**K8s 기반 자동 스케일링 및 분산 크롤링 아키텍처 구축**
-
-### 🎯 K8s 도입 목표
-
-단일 서버의 한계를 넘어 **무한 확장 가능한** 크롤러 시스템 구축:
-- ✅ 큐 길이에 따른 **자동 스케일링** (KEDA)
-- ✅ 수평 확장으로 **처리량 무제한 증가**
-- ✅ 고가용성 및 장애 복구
-- ✅ 리소스 최적화로 **비용 절감**
-
-### 🏗️ K8s 아키텍처
-
-```
-┌──────────────────────────────────────────────────┐
-│            Kubernetes Cluster                     │
-│                                                   │
-│  ┌─────────────────────────────────────────────┐ │
-│  │  Crawler Workers (Auto-scaled: 1-20 pods)   │ │
-│  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌───────┐│ │
-│  │  │Worker 1│ │Worker 2│ │Worker 3│ │ ...   ││ │
-│  │  │16 cores│ │16 cores│ │16 cores│ │       ││ │
-│  │  └────────┘ └────────┘ └────────┘ └───────┘│ │
-│  └──────────────────┬───────────────────────────┘ │
-│                     │                             │
-│     ┌───────────────▼────────┬──────────────────┐ │
-│     │ Redis StatefulSet      │ PostgreSQL       │ │
-│     │ (Queue Management)     │ StatefulSet      │ │
-│     │ - Priority Queues      │ (Crawled Data)   │ │
-│     │ - KEDA Monitoring      │ - 20GB Storage   │ │
-│     └────────────────────────┴──────────────────┘ │
-└──────────────────────────────────────────────────┘
-```
-
-### 📦 K8s 구성 요소
-
-| 컴포넌트 | 타입 | 리소스 | 스케일링 |
-|---------|------|--------|----------|
-| **Crawler Workers** | Deployment | 2-4 CPU, 4-8GB | KEDA (큐 기반) |
-| **Redis** | StatefulSet | 250m-1 CPU, 512MB-2GB | 수동 |
-| **PostgreSQL** | StatefulSet | 500m-2 CPU, 1-4GB | 수동 |
-
-### 🎚️ KEDA 자동 스케일링
-
-**큐 길이 기반 스케일링 전략:**
-
-```yaml
-큐 > 500 items  → 워커 Pod 20개로 스케일 아웃
-큐 > 100 items  → 워커 Pod 10개로 스케일 아웃
-큐 < 50 items   → 워커 Pod 2개로 스케일 인
-큐 = 0 items    → 워커 Pod 1개 (최소)
-```
-
-**예상 효과:**
-- 💰 **비용 절감**: 유휴 시간 80% 리소스 감소
-- 🚀 **버스트 처리**: 대량 URL 투입 시 즉시 확장
-- ⚖️ **자동 균형**: 워크로드에 따라 자동 조정
-
-### 📊 성능 예측
-
-| 구성 | 워커 Pods | 총 CPU Cores | 예상 처리량 | 비용 효율 |
-|------|----------|--------------|------------|----------|
-| 최소 (유휴) | 1 | 16 | 10-15 pages/sec | ⭐⭐⭐⭐⭐ |
-| 중간 (일반) | 5 | 80 | 50-75 pages/sec | ⭐⭐⭐⭐ |
-| 최대 (피크) | 20 | 320 | **200-300 pages/sec** | ⭐⭐⭐ |
-
-### 🚀 빠른 시작
+### 2. 크롤링 시작
 
 ```bash
-# 1. Docker 이미지 빌드
-cd crawler-challenge
-docker build -t crawler-worker:latest .
-
-# 2. K8s 배포
-kubectl apply -f k8s/base/namespace.yaml
-kubectl apply -f k8s/base/secret.yaml
-kubectl apply -f k8s/base/configmap.yaml
-kubectl apply -f k8s/base/postgres-statefulset.yaml
-kubectl apply -f k8s/base/redis-statefulset.yaml
-kubectl apply -f k8s/base/crawler-deployment.yaml
-
-# 3. KEDA 자동 스케일링 활성화
-kubectl apply -f k8s/autoscaling/keda-scaledobject.yaml
-
-# 4. 모니터링
-kubectl get pods -n crawler -w
-kubectl top pods -n crawler
+# 워커 수는 환경에 맞게 조절 (8GB RAM → 4 workers 권장)
+python runners/sharded_master.py --count 10000 --workers 4
 ```
 
-### 📁 K8s 구조
+### 3. 워커 스케일 조절
 
-```
-k8s/
-├── base/
-│   ├── namespace.yaml              # Namespace 생성
-│   ├── configmap.yaml             # 크롤러 설정 (환경 변수)
-│   ├── secret.yaml                # DB 비밀번호
-│   ├── postgres-statefulset.yaml  # PostgreSQL + init.sql
-│   ├── redis-statefulset.yaml     # Redis + 영구 저장
-│   └── crawler-deployment.yaml    # 크롤러 워커
-├── autoscaling/
-│   └── keda-scaledobject.yaml    # KEDA 자동 스케일링
-└── DEPLOY.md                      # 배포 가이드
+```bash
+# CLI에서 직접 조절
+python runners/sharded_master.py --workers 8
+
+# 또는 Docker Compose로
+docker-compose up -d --scale crawler-worker=6
 ```
 
-### 🎯 주요 기능
+> 📖 **상세 설정은** [DEPLOY.md](./crawler-challenge/docs/DEPLOY.md) **참고**
 
-1. **자동 스케일링**
-   - KEDA: Redis 큐 길이 모니터링
-   - HPA: CPU/메모리 기반 스케일링 (백업)
-
-2. **고가용성**
-   - StatefulSet으로 데이터 영속성 보장
-   - PersistentVolume으로 데이터 보호
-   - Liveness/Readiness Probe로 자동 복구
-
-3. **보안**
-   - Secret으로 비밀번호 관리
-   - Non-root 컨테이너 실행
-   - Network Policy 지원 (추가 가능)
-
-4. **모니터링**
-   - 리소스 사용량 추적
-   - 로그 집중화
-   - Health check 자동화
-
-### 💡 다음 단계
-
-- [ ] Prometheus + Grafana 모니터링 대시보드
-- [ ] 멀티 클러스터 지오 분산 크롤링
-- [ ] CI/CD 파이프라인 (GitOps)
-- [ ] Cost Optimization (Spot Instances)
-
-**상세 배포 가이드**: `k8s/DEPLOY.md` 참조
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## ⚡ Phase 7: 공격적 최적화 - 동시성 극대화 (2025-11-13)
+## Architecture
 
-**병목 지점 분석 및 공격적 최적화를 통한 처리량 극대화**
+### 왜 두 대의 머신인가?
 
-### 🔍 성능 병목 분석
+8GB MacBook에서 크롤러와 Prometheus+Grafana가 리소스 경쟁을 벌이는 문제가 있었습니다. **크롤링**과 **관측**을 분리해서 각자의 역할에 집중하도록 했습니다.
 
-기존 크롤러의 주요 제한 요인:
-1. **낮은 동시성**: Semaphore 20개 → 네트워크 대역폭 미활용
-2. **제한적 연결**: 호스트당 5개 → 인기 도메인 병목
-3. **작은 워커 수**: 4개 워커 → 멀티코어 CPU 미활용
-4. **작은 배치**: 25개/배치 → 빈번한 전환 오버헤드
-5. **긴 딜레이**: 2초 기본 → 불필요한 대기
-6. **긴 타임아웃**: 30초 → 느린 서버에 장시간 대기
-
-### 🚀 공격적 최적화 설정
-
-```python
-# config/settings.py
-GLOBAL_SEMAPHORE_LIMIT = 200      # 20 → 200 (10배)
-TCP_CONNECTOR_LIMIT = 300          # 100 → 300 (3배)
-TCP_CONNECTOR_LIMIT_PER_HOST = 20  # 5 → 20 (4배)
-DEFAULT_CRAWL_DELAY = 0.5          # 2.0 → 0.5 (75% 감소)
-WORKER_THREADS = 16                # 4 → 16 (4배)
-BATCH_SIZE = 100                   # 25 → 100 (4배)
-REQUEST_TIMEOUT = 10               # 30 → 10 (66% 감소)
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          Tailscale Mesh VPN                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │                                                    │
+         ▼                                                    ▼
+┌────────────────────────────────────────┐    ┌────────────────────────────────┐
+│      MacBook M2 (Crawler Host)         │    │   Desktop (Observer Host)      │
+│                                        │    │                                │
+│  ┌──────────────────────────────────┐  │    │  ┌──────────────────────────┐  │
+│  │         Sharded Master           │  │    │  │      Prometheus          │  │
+│  │         + Tranco URL 로드        │──┼────┼─►│      + 15s 스크랩         │  │
+│  │         + Prometheus Exporter    │  │    │  └────────────┬─────────────┘  │
+│  └──────────────┬───────────────────┘  │    │               │                │
+│                 │                      │    │  ┌────────────▼─────────────┐  │
+│  ┌──────────────▼───────────────────┐  │    │  │       Grafana            │  │
+│  │      Workers (1~N, 동적 조절)     │  │    │  │       + 10개 패널         │  │
+│  │      + robots.txt 준수           │  │    │  └──────────────────────────┘  │
+│  └──────────────┬───────────────────┘  │    │                                │
+│                 │                      │    │  ※ 순수 관측 전용              │
+│  ┌──────────────▼───────────────────┐  │    └────────────────────────────────┘
+│  │     Redis (3-Shard Queue)        │  │
+│  │     + 우선순위 큐 (4단계)         │  │
+│  └──────────────┬───────────────────┘  │
+│                 │                      │
+│  ┌──────────────▼───────────────────┐  │
+│  │        PostgreSQL + DLQ          │  │
+│  └──────────────┬───────────────────┘  │
+│                 │                      │
+│  ┌──────────────▼───────────────────┐  │
+│  │      Postgres Exporter           │──┼────► Prometheus
+│  └──────────────────────────────────┘  │
+└────────────────────────────────────────┘
 ```
 
-### 📊 최적화 영향 분석
+### Master-Worker 패턴
 
-| 최적화 항목 | 변경 | 이론적 증가 | 예상 실제 | 우선순위 |
-|-----------|------|-----------|----------|---------|
-| Semaphore | 20→200 | 10x | 5-7x | ⭐⭐⭐⭐⭐ |
-| 워커 수 | 4→16 | 4x | 3-3.5x | ⭐⭐⭐⭐⭐ |
-| 배치 크기 | 25→100 | 1.5x | 1.3-1.5x | ⭐⭐⭐⭐ |
-| Host 연결 | 5→20 | 4x | 1.5-2x | ⭐⭐⭐ |
-| 딜레이 | 2→0.5s | 4x | 1.5-2x | ⭐⭐⭐ |
-| 타임아웃 | 30→10s | 1.5x | 1.2-1.3x | ⭐⭐ |
+```
+                    ┌─────────────────────┐
+                    │    Sharded Master   │
+                    │    :8000 (metrics)  │
+                    └──────────┬──────────┘
+                               │
+           ┌───────────────────┼───────────────────┐
+           ▼                   ▼                   ▼
+    ┌──────────┐        ┌──────────┐        ┌──────────┐
+    │ Shard 0  │        │ Shard 1  │        │ Shard 2  │
+    │ (DB 1)   │        │ (DB 2)   │        │ (DB 3)   │
+    └──────────┘        └──────────┘        └──────────┘
+           │                   │                   │
+           └───────────────────┼───────────────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │   Workers (1 ~ N개)     │
+                 │                         │
+                 │   ※ 모든 워커가         │
+                 │     모든 샤드에 접근     │
+                 │                         │
+                 │   ※ --workers 옵션으로  │
+                 │     동적 조절 가능       │
+                 └─────────────────────────┘
+```
 
-### 🎯 성능 예측
-
-**기존 (Phase 1)**: 2.73 pages/sec
-
-**공격적 최적화 예측**:
-- 이론적 최대: 2.73 × 7 = **19.1 pages/sec**
-- 현실적 예상: 2.73 × 4-5 = **10.9-13.7 pages/sec**
-- 보수적 예상: 2.73 × 3 = **8.2 pages/sec**
-
-### 📈 최종 성능 비교 (전체 Phase)
-
-| 구성 | 처리량 (pages/sec) | 개선율 | 워커 | 성공률 | 안정성 | 용도 |
-|------|------------------|-------|------|--------|--------|------|
-| 기본 단일 | 0.71 | 기준 | 1 | 100% | ⭐⭐⭐⭐⭐ | 테스트 |
-| 멀티스레딩 (기존) | 2.73 | 3.8x | 4 | 71% | ⭐⭐⭐⭐ | 일반 |
-| **공격적 최적화** | **10-15 (예상)** | **14-21x** | **16** | **65-75%** | **⭐⭐⭐** | **대규모** |
-| 샤딩 처리 | 0.68 | 0.96x | 3 | 95% | ⭐⭐⭐⭐⭐ | 안정성 우선 |
-| 10k URL (기존) | 5.26 | 7.4x | 8 | 67.5% | ⭐⭐⭐⭐ | 엔터프라이즈 |
-
-### ⚠️ 트레이드오프
-
-**장점**:
-- ✅ 처리량 대폭 향상 (10-15 pages/sec 목표)
-- ✅ CPU/네트워크 자원 최대 활용
-- ✅ 대규모 크롤링 시간 단축 (10k: 31분→10-15분 예상)
-
-**리스크**:
-- ⚠️ 429 (Too Many Requests) 에러 증가 가능
-- ⚠️ 서버 부하로 일부 사이트 차단 위험
-- ⚠️ 네트워크 대역폭 포화 가능
-- ⚠️ 메모리 사용량 증가 (16 워커 + 200 동시 연결)
-
-### 💡 적용 시나리오
-
-**공격적 최적화 권장:**
-- 짧은 시간 내 대량 크롤링
-- 충분한 네트워크 대역폭 보유
-- 성공률보다 처리량 우선
-
-**보수적 설정 권장:**
-- 장기 안정적 운영
-- 사이트 차단 위험 최소화
-- 높은 성공률 필수
-
-### 📝 구현 파일
-
-- `config/settings.py`: 집중 설정 관리
-- `polite_crawler.py`: 동적 설정 로드
-- `multithreaded_crawler.py`: 자동 워커/배치 적용
-- `aggressive_performance_test.py`: 독립 성능 테스트 도구
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 분당 처리량 증가를 위한 멀티프로세싱 크롤러 구현 (2025-10-03)
-
-멀티스레딩과 분산 처리를 통해 크롤링 성능을 향상시키는 시스템을 구현했습니다.
-
-### Phase 1: 멀티스레딩 크롤러 구현
-
-**구현 내용:**
-- `multithreaded_crawler.py`: 4개 워커 스레드를 활용한 멀티스레딩 크롤러
-- ThreadPoolExecutor 기반 작업 분산 처리
-- 스레드간 안전한 큐 기반 작업 분배
-- 실시간 결과 처리 시스템
-
-**성능 테스트 결과 (100개 URL):**
-- **처리 속도**: 2.73 pages/sec (164 pages/분)
-- **총 처리**: 100개 (71개 성공, 29개 실패)
-- **성공률**: 71%
-- **실행 시간**: 0.6분 (36초)
-- **워커 스레드**: 4개
-
-### Phase 2: 분산 멀티프로세스 크롤러 구현
-
-**구현 내용:**
-- `distributed_crawler.py`: 마스터-워커 분산 아키텍처
-- Docker Compose 기반 멀티컨테이너 지원
-- Redis 기반 작업 큐 분산 관리
-- 실시간 모니터링 대시보드
-
-**성능 테스트 결과 (100개 URL, 2개 워커):**
-- **워커 1**: 34개 성공 (68% 성공률, 35.3 pages/분)
-- **워커 2**: 37개 성공 (74% 성공률, 35.4 pages/분)
-- **총 성공**: 71개
-- **전체 성공률**: 71%
-- **실행 시간**: 1.4분
-- **평균 처리속도**: 0.59 pages/sec
-
-### 구현된 확장 시스템
-
-**1. 멀티스레딩 최적화:**
-- 스레드 풀 기반 병렬 처리
-- 비동기 I/O와 멀티스레딩 조합
-- 스레드간 안전한 데이터 공유
-
-**2. 분산 프로세싱:**
-- 마스터-워커 패턴 구현
-- Redis 큐 기반 작업 분산
-- Docker Compose 멀티컨테이너 지원
-- 실시간 모니터링 대시보드
-
-**3. 성능 비교:**
-
-| 구성 | 처리량 (pages/sec) | 성공률 | 실행시간 | 확장성 |
-|------|------------------|--------|----------|--------|
-| 기본 단일 | 0.71 | 100% | - | 제한적 |
-| 멀티스레딩 | **2.73** | 71% | 36초 | 중간 |
-| 분산 처리 | 0.59 | 71% | 84초 | 높음 |
-
-### Phase 3: Redis 큐 샤딩 구현
-
-**구현 내용:**
-- `sharded_queue_manager.py`: 3개 샤드로 Redis 큐 분할
-- `sharded_distributed_crawler.py`: 샤드별 워커 할당 시스템
-- URL 해시 기반 샤드 라우팅 (일관된 해싱)
-- 샤드별 로드 밸런싱 및 통계 수집
-
-**성능 테스트 결과 (100개 URL, 3개 워커, 3개 샤드):**
-- **워커 1 (샤드 0)**: 31개 성공 (91% 성공률, 30.9 pages/분)
-- **워커 2 (샤드 1)**: 32개 성공 (94% 성공률, 31.1 pages/분)
-- **워커 3 (샤드 2)**: 32개 성공 (94% 성공률, 32.5 pages/분)
-- **총 성공**: 95개
-- **전체 성공률**: 95%
-- **실행 시간**: 2.46분
-- **평균 처리속도**: 0.68 pages/sec
-
-**샤드 분산 효과:**
-- 샤드별 균등 분산: 34/33/33개 URL
-- 높은 성공률: 91-94% (기존 71%에서 향상)
-- 안정적인 처리 시간: 2.46분 (일관된 성능)
-
-### 최종 성능 비교 (3단계 완료)
-
-| 구성 | 처리량 (pages/sec) | 성공률 | 실행시간 | 확장성 | 장점 |
-|------|------------------|--------|----------|--------|------|
-| 기본 단일 | 0.71 | 100% | - | 제한적 | 단순함 |
-| 멀티스레딩 | **2.73** | 71% | 36초 | 중간 | 단일 노드 최고 성능 |
-| 분산 처리 | 0.59 | 71% | 84초 | 높음 | 수평 확장 |
-| 샤딩 처리 | 0.68 | **95%** | 148초 | **최고** | 안정성과 확장성 |
-
-**최종 결론:**
-- **최고 성능**: 멀티스레딩 (2.73 pages/sec)
-- **최고 안정성**: 샤딩 처리 (95% 성공률)
-- **최고 확장성**: 샤딩 처리 (무제한 샤드 추가 가능)
-
-## 대규모 크롤링 테스트 (1만개 URL)
-
-### 진행 중인 대규모 테스트 (2025-10-03 21:19 시작)
-
-**테스트 환경:**
-- **크롤러**: 멀티스레딩 크롤러 (8개 워커)
-- **URL 규모**: 10,000개 (Tranco Top 2500 확장)
-- **배치 크기**: 200개 URL/사이클
-- **목표**: 대규모 환경에서의 성능 및 안정성 검증
-
-**최종 결과 (완료 - 2025-10-03 21:50):**
-- **총 처리**: 10,000개 URL
-- **성공**: 6,746개 (성공률 67.5%)
-- **실행 시간**: 31.7분
-- **처리 속도**: **5.26 pages/초** (315.8 pages/분)
-- **DB 저장**: 5,598개 (중복 제거 후)
-
-**최종 성과:**
-1. ✅ **대규모 확장성**: 100개 → 10,000개 (100배 확장) 성공
-2. ✅ **성능 향상**: 2.73 → 5.26 pages/sec (92% 향상)
-3. ✅ **시스템 안정성**: 31.7분 연속 크롤링 무중단 완료
-4. ✅ **메모리 효율성**: 18GB로 엔터프라이즈급 처리
-
-**기술적 달성:**
-- **51개 사이클**: 평균 37.3초/사이클로 안정적 처리
-- **중복 처리**: 44% 중복 URL 자동 감지 및 제거
-- **에러 내성**: 32.5% 실패율에도 시스템 안정성 유지
-- **실시간 모니터링**: PPS, CPU, 메모리 지속 추적
-
-**확장성 입증:**
-
-| 테스트 규모 | 처리량 (pages/sec) | 성공률 | 실행시간 | 확장성 |
-|------------|------------------|--------|----------|--------|
-| 100개 (Phase 1) | 2.73 | 71% | 36초 | 기준 |
-| **10,000개** | **5.26** | **67.5%** | **31.7분** | **✅ 100배 확장** |
-
-**실무 적용 가능성:**
-- 엔터프라이즈급: 10,000+ URL 규모 처리 가능
-- 처리 규모: 5,000-15,000 URL/시간
-- 권장 환경: 16GB+ 메모리, 8+ 코어 CPU
-
-**상세 보고서**: `10k_crawling_report.md` 참조
-
-## refactor: 로깅 시스템 개선으로 콘솔 출력 최소화 (2025-10-03)
-
-대규모 크롤링 시 과도한 로그가 콘솔에 출력되어 발생하던 문제를 해결했습니다. 이제 모든 로그는 `enterprise_crawler.log` 파일에만 기록되며, 콘솔 출력은 최소화되어 안정성이 향상되었습니다.
-
-**세부 정보:**
-- **수정 파일:** `enterprise_crawler.py`
-- **변경 사항:**
-    - `logging.StreamHandler`를 제거하여 콘솔 로그 출력 중단
-    - 크롤러 시작 시 로그 파일 위치 안내 메시지 추가
-
-## 크롤러 기능 정상화 및 주요 버그 수정 (2025-10-02)
-
-장시간 실행 시 크롤러가 멈추고, 테스트 실행 시 성공률이 0%로 나오는 등 비정상적으로 동작하던 크롤러의 기능을 전반적으로 디버깅하고 정상화했습니다.
-
-**주요 해결 문제:**
-
-1.  **실행 환경 문제 해결:**
-    *   `docker-compose`로 실행되어야 하는 Redis 및 PostgreSQL 서비스가 누락되어 발생하는 연결 오류를 해결했습니다.
-    *   Docker 볼륨 초기화 문제로 데이터베이스가 생성되지 않던 현상을 해결했습니다.
-
-2.  **핵심 로직 및 버그 수정:**
-    *   **`robots.txt` 처리 로직 전면 수정:** 크롤링 성공률 0%의 핵심 원인이었던 `robots.txt` 처리 로직의 구조적 결함을 수정했습니다. 기존에는 도메인 전체에 대해 단일 규칙을 적용했으나, 이제 각 URL 경로에 따라 규칙을 개별적으로 판단하여 불필요한 차단을 방지합니다.
-    *   **데이터베이스 연결 관리 개선:** 단일 연결 방식에서 커넥션 풀(`ThreadedConnectionPool`)을 사용하도록 변경하여 안정성과 효율성을 높였습니다.
-    *   **기타 버그 수정:** 통계 출력 오류, 로그 인코딩 오류 등 다수의 자잘한 버그를 수정하여 프로그램 안정성을 확보했습니다.
-
-**현재 상태:**
-
-*   크롤러의 핵심 기능이 모두 정상적으로 작동함을 확인했습니다.
-*   테스트 목적으로 `robots.txt` 규칙을 무시하는 기능을 추가했으며, 이 모드에서 100% 크롤링 성공률을 기록하여 크롤러의 기계적인 동작이 완벽함을 증명했습니다.
-*   사용자 요청에 따라, 현재는 `robots.txt`를 무시하는 테스트 모드로 설정되어 있습니다.
-
-# Crawler Challenge
-
-목표: Python으로 28 pages/sec 달성, GIL 병목점 분석
-
-## 설정 완료
-
-## 1차 성능 테스트 결과
-
-**테스트 환경:**
-- 10개 URL 동시 크롤링
-- jsonplaceholder.typicode.com API 엔드포인트
-- 최대 동시 요청: 50개
-- 요청 타임아웃: 10초
-
-**결과:**
-- **달성 성능: 12.53 pages/sec**
-- 목표 대비: 44.8% (28 pages/sec 목표)
-- 성공률: 100% (10/10 성공)
-- 크롤링 시간: 0.80초
-
-**메트릭 모니터링:**
-- PPS: 실시간 처리율 추적 ✓
-- CPU: psutil 활용 모니터링 ✓  
-- Active Tasks: 동시 실행 태스크 수 ✓
-
-**발견된 이슈:**
-- Unicode 인코딩 문제 (Windows cp949) → 수정 완료
-- httpbin.org 503 에러 → 안정적인 API로 변경
-- Event loop 종료 경고 (무해함)
-
-## 2차 성능 테스트 결과 (50개 URL)
-
-**테스트 환경:**
-- 50개 실제 웹사이트 URL (Tranco Top 50)
-- Google, YouTube, Facebook, Twitter 등 주요 사이트
-- 최대 동시 요청: 50개
-- 요청 타임아웃: 10초
-
-**테스트 결과 비교:**
-
-| 테스트 | URL 수 | 성능 (pages/sec) | 성공률 | 크롤링 시간 | 목표 달성률 |
-|--------|--------|------------------|--------|-------------|-------------|
-| 1차 (API) | 10 | 12.53 | 100% | 0.80s | 44.8% |
-| 1차 (API) | 50 | **66.05** | 100% | 0.76s | **235.9%** |
-| 2차 (실제) | 50 | **14.01** | 96% (48/50) | 3.57s | **50.0%** |
-
-**주요 발견사항:**
-- **API vs 실제 사이트**: API 테스트에서는 66 pages/sec까지 달성했지만, 실제 웹사이트에서는 14 pages/sec로 감소
-- **실제 웹 크롤링 성능**: 목표 28 pages/sec의 50% 달성
-- **성공률**: 96% (Twitter에서 헤더 크기 초과 에러, Facebook 한글 인코딩 이슈)
-- **네트워크 지연**: 실제 사이트는 지연시간이 훨씬 크므로 성능 차이 발생
-
-**병목점 분석:**
-1. **네트워크 지연**: 실제 웹사이트의 응답 시간이 주요 병목
-2. **DNS 해석**: 각 도메인별 DNS 조회 시간
-3. **SSL 핸드셰이크**: HTTPS 연결 설정 오버헤드
-4. **컨텐츠 크기**: 실제 웹페이지가 API보다 훨씬 큼
-
-## 3차 최적화 테스트 결과 (연결 풀 + DNS 캐싱)
-
-**구현된 최적화:**
-- TCPConnector 설정: 총 100개 연결, 호스트당 10개 연결 제한
-- DNS 캐싱: 5분 TTL로 DNS 조회 결과 캐싱
-- Keep-alive: 60초 연결 유지로 재사용 최적화
-- User-Agent 및 압축 헤더 추가
-- 연결 정리 자동화 활성화
-
-**테스트 결과:**
-- **성능**: 13.73 pages/sec (이전 14.01 대비 -2.0%)
-- **피크 PPS**: 30.77 (실시간 모니터링에서 관찰된 최고값)
-- **성공률**: 96% (48/50) - 동일한 Twitter 헤더 이슈
-- **크롤링 시간**: 3.64초 (이전 3.57초 대비 약간 증가)
-
-**예상과 다른 결과 분석:**
-1. **오버헤드 증가**: 연결 풀 관리 비용이 소규모 테스트에서는 오히려 부담
-2. **DNS 캐싱 효과 제한**: 50개 서로 다른 도메인으로 캐싱 효과 미미
-3. **Keep-alive 미활용**: 단일 요청 패턴에서 연결 재사용 기회 없음
-
-**학습 포인트:**
-- 최적화가 항상 성능 향상을 보장하지 않음
-- 소규모 테스트에서는 오버헤드가 더 클 수 있음
-- 실제 크롤링 패턴(반복 요청)에서 더 효과적일 것
-
-## 4차 GIL 병목 테스트 결과 (CPU 집약적 처리)
-
-**구현된 CPU 집약적 작업:**
-- BeautifulSoup으로 전체 텍스트 추출 및 파싱
-- 단어 개수, 고유 단어 수, 평균 단어 길이 계산
-- 정규식으로 이메일, 링크, 전화번호 추출
-- MD5 해시 계산으로 콘텐츠 지문 생성
-- 문자 빈도 분석 및 HTML 태그 카운팅
-- 메타 정보 추출 등 12가지 CPU 작업
-
-**GIL 병목 현상 확인:**
-- **성능**: 11.89 pages/sec (이전 13.73 대비 -13.4%)
-- **크롤링 시간**: 4.21초 (네트워크 + CPU 처리 시간)
-- **CPU 사용률 변화**: 초기 50% → 평균 18.6% → 최종 9.8%
-- **성공률**: 96% (48/50) - 동일한 에러 패턴
-
-**GIL 영향 분석:**
-1. **순차적 처리 강제**: CPU 집약적 작업이 멀티스레딩 효과 제한
-2. **처리 시간 증가**: 네트워크 대기 + CPU 작업으로 총 시간 연장
-3. **메트릭 검증**: Google(13단어), YouTube(66단어) 등 실제 분석 결과 확인
-
-**성능 저하 요인:**
-- HTML 파싱과 정규식 처리가 GIL로 인해 병렬 처리 불가
-- 네트워크 I/O 완료 후 CPU 작업이 순차적으로 실행
-- 해시 계산 및 문자 분석 등이 추가 오버헤드 발생
-
-**GIL 병목점 체험 성공:**
-- 네트워크 중심 → CPU 중심으로 병목 이동 확인
-- 실제 웹 크롤링에서 텍스트 처리 작업의 성능 영향 실증
-- asyncio의 한계와 멀티프로세싱 필요성 입증
-
-## 5차 멀티프로세싱 테스트 결과 (GIL 우회)
-
-**구현된 멀티프로세싱 아키텍처:**
-- ProcessPoolExecutor로 CPU 집약적 작업 분리
-- 메인 프로세스: 네트워크 I/O (aiohttp + asyncio)
-- 워커 프로세스: HTML 파싱 및 텍스트 분석 (GIL 없음)
-- 프로세스 간 통신으로 결과 수집
-
-**성능 비교 결과:**
-
-| 구성 | 워커 프로세스 | 성능 (pages/sec) | 크롤링 시간 | 단일 프로세스 대비 |
-|------|---------------|------------------|-------------|-------------------| 
-| 단일 프로세스 | 0 | 11.89 | 4.21s | - |
-| 멀티프로세싱 | 2 | **13.84** | 3.61s | **+16.4%** |
-| 멀티프로세싱 | 4 | **14.35** | 3.49s | **+20.7%** |
-
-**CPU 코어별 사용률 분석:**
-- **단일 프로세스**: 주로 1-2개 코어만 사용, GIL 제약
-- **2 워커**: 여러 코어 동시 활용 (Cores: 35/18/62/32/14/14/58/30...)
-- **4 워커**: 더 균등한 코어 분산 (Cores: 31/21/63/23/35/14/58/40...)
-
-**GIL 우회 효과 확인:**
-1. **CPU 병렬 처리**: 여러 프로세스에서 동시 HTML 파싱
-2. **코어 활용도 증가**: 12개 코어 중 8-10개 코어 활성화
-3. **처리 시간 단축**: 4.21초 → 3.49초 (17% 감소)
-
-**멀티프로세싱 한계 발견:**
-- 4 워커 vs 2 워커 성능 차이 미미 (14.35 vs 13.84)
-- 네트워크 I/O가 여전히 주요 병목점
-- 프로세스 생성/통신 오버헤드 존재
-
-**최종 성능 달성:**
-- **최고 성능**: 14.35 pages/sec (목표 28의 51.3%)
-- **GIL 우회 성공**: 멀티프로세싱으로 CPU 병목 해결
-- **실제 병목**: 네트워크 지연이 근본적 제약
-
-## 6차 극한 스케일 테스트 결과 (Python의 진짜 한계)
-
-**극한 테스트 환경:**
-- **URL 수**: 453개 (Tranco Top 500)
-- **동시 요청**: 200개 (기존 50→200으로 4배 증가)
-- **워커 프로세스**: 8개
-- **지속 시간**: 3.5분 연속 크롤링
-- **총 시도**: 900개 요청 (9라운드 × 100개)
-
-**극한 성능 결과:**
-
-| 라운드 | 시간(초) | 성능(pages/sec) | 성공률 | 특이사항 |
-|--------|----------|-----------------|--------|----------|
-| Round 1 | 30.66 | 3.26 | 85% | 첫 라운드 안정화 |
-| Round 2 | 6.44 | **15.52** | 87% | **최고 성능 달성** |
-| Round 6 | 7.98 | 12.53 | 85% | 안정적 고성능 |
-| Round 7 | 4.84 | **20.65** | 87% | **순간 최고치** |
-| 전체 평균 | - | **3.53** | **83%** | 지속 평균 성능 |
-
-**시스템 리소스 한계 발견:**
-- **CPU 사용률**: 최대 98.6% (12/12 코어 풀 가동)
-- **메모리 사용**: 15.5/23.9GB (65% 사용률)
-- **네트워크 연결**: 200개 동시 연결 유지
-- **에러율**: 17% (연결 타임아웃, SSL 오류 등)
-
-**Python 스케일링 한계 분석:**
-1. **네트워크 I/O 포화**: 200개 동시 요청에서 병목 발생
-2. **연결 관리 오버헤드**: 대량 연결 시 성능 저하
-3. **메모리 누수**: 장시간 실행 시 메모리 사용량 증가
-4. **에러 누적**: 높은 동시성에서 안정성 저하
-
-**실제 한계점 확인:**
-- **순간 최고**: 20.65 pages/sec (목표의 73.8%)
-- **지속 평균**: 3.53 pages/sec (목표의 12.6%)
-- **안정성**: 83% 성공률로 17% 에러 발생
-
-**Python 웹 크롤링의 현실적 한계:**
-- 28 pages/sec 목표는 **지속적으로 달성 불가**
-- 순간적으로는 20+ pages/sec 가능하지만 **안정성 부족**
-- **네트워크 지연**이 GIL보다 더 큰 제약
-- 대규모 크롤링에는 **분산 시스템** 필요
-
-## 최종 성과 분석 및 시각화
-
-### 성능 시각화 결과
-
-프로젝트의 모든 단계별 성능 데이터를 matplotlib를 활용하여 5가지 차트로 시각화했습니다:
-
-**생성된 시각화 파일:**
-- `performance_timeline.png`: 각 Phase별 성능 변화 추이
-- `cpu_utilization.png`: CPU 코어별 사용률 비교 (GIL vs 멀티프로세싱)
-- `gil_comparison.png`: 작업 유형별 GIL과 멀티프로세싱 성능 비교
-- `bottleneck_analysis.png`: 병목점별 영향도 분석
-- `scale_limits.png`: 동시 요청 수에 따른 확장성 한계
-
-### 핵심 발견사항
-
-**1. 성능 진화 과정 (Performance Timeline)**
-- API 테스트: 66.05 pages/sec (목표 대비 236%)
-- 실제 웹사이트: 14.35 pages/sec (목표 대비 51%)
-- 극한 스케일: 3.53 pages/sec (목표 대비 13%)
-
-**2. GIL 영향 분석 (GIL vs Multiprocessing)**
-- 네트워크 I/O: GIL 영향 없음 (100% 성능 유지)
-- HTML 파싱: 멀티프로세싱으로 143% 성능 향상
-- 정규식 처리: 멀티프로세싱으로 220% 성능 향상
-- 텍스트 분석: 멀티프로세싱으로 367% 성능 향상
-
-**3. 병목점 우선순위 (Bottleneck Analysis)**
-1. **네트워크 지연** (85점): 가장 큰 제약 요소
-2. **DNS 조회** (60점): 도메인별 해석 시간
-3. **SSL 핸드셰이크** (45점): HTTPS 연결 오버헤드
-4. **HTML 파싱** (30점): CPU 집약적 작업
-5. **GIL 제약** (25점): 멀티프로세싱으로 우회 가능
-6. **메모리 관리** (15점): 상대적으로 낮은 영향
-
-**4. 확장성 한계 (Scalability Limits)**
-- 최적 동시 요청 수: 25-50개
-- 200개 동시 요청에서 17% 에러율 발생
-- 성능과 안정성의 트레이드오프 명확히 확인
-
-### 최종 결론
-
-**Python 웹 크롤링의 실제 성능:**
-- **이론적 최고**: 66 pages/sec (API 환경)
-- **실용적 최고**: 14-20 pages/sec (실제 웹사이트)
-- **지속 가능**: 3-4 pages/sec (대규모 장시간)
-
-**GIL의 실제 영향:**
-- 네트워크 I/O 중심 작업에서는 **제한적**
-- CPU 집약적 처리에서 **멀티프로세싱으로 2-4배 향상 가능**
-- 하지만 **네트워크 지연이 더 큰 병목**
-
-**28 pages/sec 목표 달성 불가능한 이유:**
-1. 네트워크 지연이 근본적 제약 (85% 영향)
-2. 실제 웹사이트의 응답 시간 불일치
-3. 높은 동시성에서 연결 관리 오버헤드
-4. Python 인터프리터 자체의 성능 한계
-
-**실무 권장사항:**
-- 28+ pages/sec가 필요하면 **Go, Rust 등 컴파일 언어** 고려
-- Python 사용 시 **분산 크롤링 시스템** 구축 필요
-- 멀티프로세싱은 **CPU 작업이 많을 때만** 효과적
-- 네트워크 최적화(CDN, 캐싱)가 성능 향상에 더 중요
-## 자동 작업 로깅 시스템 구축 (2025-09-22 23:36:08)
-
-README 자동 업데이트와 Git 커밋 자동화 시스템을 구현했습니다.
-
-**세부 정보:**
-- 기능: 작업 로깅, README 업데이트, Git 자동 커밋
-- 파일: work_logger.py, work_progress.json
-- 다음 단계: Tranco Top 1M 다운로드 시스템 구현
-
-
-## 자동 작업 로깅 시스템 구축 (2025-09-22 23:36:52)
-
-README 자동 업데이트와 Git 커밋 자동화 시스템을 구현했습니다.
-
-**세부 정보:**
-- 기능: 작업 로깅, README 업데이트, Git 자동 커밋
-- 파일: work_logger.py, work_progress.json
-- 다음 단계: Tranco Top 1M 다운로드 시스템 구현
-
-
-## Tranco Top 1M 시스템 테스트 완료 (2025-09-22 23:37:50)
-
-샘플 데이터를 사용하여 100개 URL 파싱 및 우선순위 시스템을 검증했습니다.
-
-**세부 정보:**
-- 총 도메인 수: 1,000
-- 파싱된 URL: 100
-- 테스트 파일: data\tranco_top1m.csv
-- 상태: 정상 작동
-
-
-## 정중한 크롤링 시스템 테스트 완료 (2025-09-22 23:40:59)
-
-robots.txt 준수와 도메인별 딜레이를 적용한 5개 사이트 크롤링을 완료했습니다.
-
-**세부 정보:**
-- 총 요청: 5
-- 성공률: 40.0%
-- 도메인 수: 5
-- 평균 딜레이: 2.4초
-- 상태: 정상 작동
-
-
-## Tranco Top 1M 확장 크롤링 시스템 구축 완료 (2025-09-22 23:44:23)
-
-자동 작업 로깅, Tranco Top 1M 다운로드, Redis 큐 관리, robots.txt 준수, 정중한 크롤링 정책을 모두 통합한 엔터프라이즈급 크롤링 시스템을 완성했습니다.
-
-**세부 정보:**
-- 구현 시스템: Tranco + Redis + Polite Crawler + Work Logger
-- URL 확장: Top 1M 사이트 지원
-- 큐 관리: 우선순위별 Redis 큐
-- robots.txt: 완전 준수
-- 도메인 딜레이: 자동 적용
-- 테스트 결과: 100개 사이트 22.6초 완료
-- 자동 로깅: README + Git 커밋
-- 상태: 프로덕션 준비 완료
-
-
-## Fix: start_crawler.bat 경로 문제 해결 (2025-09-29 20:18:00)
-
-start_crawler.bat 파일이 어디서 실행되든 항상 올바른 경로에서 실행되도록 스크립트 맨 위에 `cd /d %~dp0` 명령어를 추가했습니다.
-
-**세부 정보:**
-- 수정 파일: start_crawler.bat
-- 수정 내용: 스크립트 최상단에 `cd /d %~dp0` 추가
-- 기대 효과: 경로 문제 없이 크롤러 정상 실행
-
-
-## 크롤러 멈춤 현상 해결 및 Tranco 연동 방식 개선 (2025-10-01 16:16:04)
-
-26시간 이상 멈추던 크롤러의 원인이었던 Tranco 목록 다운로드 실패 문제를 해결했습니다. 기존의 불안정한 URL 직접 접근 방식 대신, 공식 tranco 라이브러리를 사용하도록 tranco_manager.py를 리팩토링하여 안정성을 높였습니다.
-
-**세부 정보:**
-- 수정 파일: tranco_manager.py, enterprise_crawler.py, requirements.txt
-- 핵심 변경: 공식 tranco 라이브러리 도입 및 관련 로직 수정
+## Redis Sharding
+
+### 랜덤 샤딩 전략
+
+초기에는 **도메인 해시 기반**으로 샤딩했지만, Hot Shard 문제가 발생했습니다.
+
+| 문제 | 원인 | 해결 |
+|------|------|------|
+| Hot Shard | 인기 도메인 집중 | 랜덤 분배로 전환 |
+| 워커 편중 | 4워커 + 3샤드 = 불균형 | 랜덤 샤드 탐색 |
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                       각 샤드 내부 구조                               │
+├─────────────────────────────────────────────────────────────────────┤
+│  Priority Queues (Sorted Set)                                       │
+│  ├─ priority_high   : Top 100 사이트     (score 900+)               │
+│  ├─ priority_medium : Top 1000 사이트    (score 800+)               │
+│  ├─ priority_normal : Top 10000 사이트   (score 700+)               │
+│  └─ priority_low    : 나머지              (score 700-)               │
+│                                                                      │
+│  State Management (Set)                                              │
+│  ├─ processing : 현재 처리 중                                        │
+│  ├─ completed  : 완료 (해시)                                         │
+│  ├─ failed     : 실패 + 에러 정보                                    │
+│  └─ retry      : 재시도 대기                                         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+## Monitoring
+
+### 메트릭 수집 구조
+
+| 카테고리 | 메트릭 예시 |
+|----------|-------------|
+| 크롤러 작업 | `tasks_completed`, `tasks_failed`, `error_details` |
+| 큐 상태 | `queue_pending`, `queue_processing`, `shard_pending` |
+| 지연 시간 | `latency_avg`, `latency_p95`, `latency_p99` |
+| PostgreSQL | `throughput_pps`, `total_pages`, `unique_domains` |
+| DLQ | `dlq_total`, `dlq_errors` |
+
+### Grafana 대시보드
+
+```
+┌─────────────┬─────────────┬─────────────┬─────────────────┐
+│ Running     │ Total CPU   │ Total       │ Redis Queue     │
+│ Workers     │ Usage       │ Memory      │ Length          │
+├─────────────┴─────────────┴─────────────┴─────────────────┤
+│ Queue by Priority              │ Processing Rate          │
+├────────────────────────────────┴──────────────────────────┤
+│ CPU per Worker    │ Memory per Worker │ Error Rate        │
+└───────────────────┴───────────────────┴───────────────────┘
+```
+
+> 📖 **상세 설정은** [MONITORING.md](./crawler-challenge/docs/MONITORING.md) **참고**
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+## CI/CD
+
+```
+Code Push ──► CI Test ──► Docker Build ──► Registry
+                │              │
+                ▼              ▼
+            Lint/Test      ghcr.io
+            Security       Trivy Scan
+```
+
+| Workflow | 트리거 | 동작 |
+|----------|--------|------|
+| `ci.yml` | 모든 push/PR | Flake8, Radon, Bandit |
+| `docker-build.yml` | main 머지, 태그 | Multi-stage 빌드, ghcr.io 푸시 |
+| `pr-automation.yml` | PR 생성 | Conventional Commits 검증, 라벨링 |
+| `release.yml` | 버전 태그 | GitHub Release, Changelog |
+
+> 📖 **상세 설정은** [CI_CD.md](./crawler-challenge/docs/CI_CD.md) **참고**
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+## Troubleshooting
+
+실제 개발 과정에서 마주친 문제들과 해결 방법입니다.
+
+| 문제 | 원인 | 해결 |
+|------|------|------|
+| **8GB 메모리 부족** | 크롤러 + 모니터링 리소스 경쟁 | 머신 분리 (크롤링/관측) |
+| **네트워크 분리** | 서로 다른 네트워크 연결 불가 | Tailscale VPN 도입 |
+| **Hot Shard** | 도메인 해시 기반 부하 집중 | 랜덤 샤딩으로 전략 변경 |
+| **워커 편중** | 4워커 + 3샤드 불균형 | 랜덤 샤드 탐색 |
+| **성공률 0%** | robots.txt 로직 오류 | 경로별 개별 판단으로 수정 |
+| **DB 병목 미감지** | PostgreSQL 메트릭 미수집 | postgres-exporter 추가 |
+| **무한 롤백** | NUL 바이트 데이터 | DLQ 시스템으로 에러 격리 |
+| **스키마 불일치** | 코드↔SQL 테이블명 다름 | init.sql 수정 + 볼륨 초기화 |
+| **워커 확장 어려움** | 고정 워커 수 | `--workers` 동적 조절 |
+| **샤드 추가 어려움** | 하드코딩 설정 | 설정 파일 기반 구성 |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+## Project Structure
+
+```
+crawler-challenge/
+├── src/
+│   ├── core/
+│   │   ├── polite_crawler.py         # 크롤링 로직, robots.txt
+│   │   └── database.py               # PostgreSQL, DLQ
+│   ├── managers/
+│   │   ├── sharded_queue_manager.py  # Redis 3-shard (랜덤)
+│   │   ├── tranco_manager.py         # URL 우선순위
+│   │   └── progress_tracker.py       # 진행 상황
+│   └── monitoring/
+│       └── metrics.py                # Prometheus 메트릭
+├── runners/
+│   ├── sharded_master.py             # 마스터
+│   └── sharded_worker.py             # 워커 (동적 확장)
+├── scripts/
+│   ├── generate_ai_report.py         # Gemini 리포트
+│   └── analyze_failures.py           # 실패 분석
+├── .github/workflows/                # CI/CD
+├── docker/
+│   ├── Dockerfile                    # Multi-stage
+│   ├── init.sql                      # 스키마 + DLQ
+│   └── queries.yaml                  # postgres-exporter
+├── monitoring/
+│   ├── docker-compose.yml            # Prometheus + Grafana
+│   └── prometheus.yml                # 스크랩 설정
+└── docs/
+    ├── 10k_crawling_report.md
+    └── reports/                      # AI 리포트
+```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+## Roadmap
+
+- [ ] **성공률 80%+** — 실패 URL 재시도 로직 개선
+- [ ] **100만 URL 완주** — 장기 안정성 검증
+- [ ] **DB 튜닝** — COPY 명령어 대량 INSERT
+- [ ] **샤드 동적 확장** — 런타임 샤드 추가/제거
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+## Built With
+
+| 영역 | 기술 |
+|------|------|
+| Language | Python 3.10 (asyncio, aiohttp) |
+| Queue | Redis 7 (3-shard) |
+| Database | PostgreSQL 15 |
+| Container | Docker, Docker Compose |
+| Monitoring | Prometheus, Grafana, postgres-exporter |
+| Network | Tailscale (Mesh VPN) |
+| CI/CD | GitHub Actions |
+| AI | Google Gemini 2.5 Flash |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+<div align="center">
+  <sub>비싼 장비 없이도 꽤 많은 걸 할 수 있다는 걸 보여주고 싶었습니다.</sub>
+  <br>
+  <sub>제한된 환경에서 병목을 찾고 해결하는 과정이 오히려 더 많은 걸 배우게 해준 것 같습니다.</sub>
+</div>
