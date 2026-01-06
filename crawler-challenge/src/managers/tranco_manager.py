@@ -101,30 +101,6 @@ class TrancoManager:
         elif rank <= 100000: return 700
         else: return 600
 
-    def generate_extended_urls(self, domain_data: List[Dict], common_paths: Optional[List[str]] = None) -> List[Dict]:
-        """도메인에서 확장 URL 생성"""
-        if common_paths is None:
-            common_paths = ['', 'about/', 'contact/', 'products/', 'services/', 'news/', 'blog/', 'support/', 'help/', 'privacy/', 'terms/', 'sitemap.xml', 'robots.txt']
-
-        extended_urls = []
-        for domain_info in domain_data[:1000]:  # 상위 1000개 도메인만
-            base_url = domain_info['url'].rstrip('/')
-            domain = domain_info['domain']
-            rank = domain_info['rank']
-            base_priority = domain_info['priority']
-
-            for i, path in enumerate(common_paths):
-                extended_urls.append({
-                    'url': f"{base_url}/{path}",
-                    'rank': rank,
-                    'domain': domain,
-                    'priority': base_priority - i - 10,
-                    'url_type': 'extended',
-                    'path': path
-                })
-        logger.info(f"확장 URL 생성 완료: {len(extended_urls)}개")
-        return extended_urls
-
     def save_urls_to_file(self, urls: List[Dict], filename: Optional[str] = None):
         """URL 리스트를 파일로 저장"""
         if filename is None: filename = self.processed_file
