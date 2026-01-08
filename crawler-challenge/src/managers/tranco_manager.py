@@ -67,42 +67,30 @@ class TrancoManager:
                 logger.error(f"Tranco 라이브러리 사용 중 예상치 못한 오류 발생: {e}")
                 return None
 
-    def parse_tranco_list_to_urls(self, tranco_list: List[Tuple[int, str]], limit: Optional[int] = None, add_www: bool = True) -> List[Dict[str, any]]:
-        """가져온 Tranco 목록을 기반으로 URL 리스트 생성"""
+    def parse_tranco_list_to_urls(self, tranco_list: List[Tuple[int, str]], limit: Optional[int] = None) -> List[Dict[str, any]]:
+        """가져온 Tranco 목록을 기반으로 URL 리스트 생성 (1 도메인 = 1 https URL)"""
         urls = []
-        protocols = ['https://', 'http://']
-        
+
         if not tranco_list:
             return []
 
-        logger.info(f"Tranco 목록 파싱 시작 (최대 {limit or len(tranco_list)}개)")
+        logger.info(f"Tranco 목록 파싱 시작 (최대 {limit or len(tranco_list)}개 도메인)")
 
         for rank, domain in tranco_list:
             if limit and len(urls) >= limit:
                 break
 
             domain = domain.strip()
-            # 기본 도메인 URL들 생성
-            for protocol in protocols:
-                urls.append({
-                    'url': f"{protocol}{domain}/",
-                    'rank': rank,
-                    'domain': domain,
-                    'priority': self._calculate_priority(rank),
-                    'url_type': 'root'
-                })
+            # 각 도메인에 대해 단일 https:// URL만 생성
+            urls.append({
+                'url': f"https://{domain}/",
+                'rank': rank,
+                'domain': domain,
+                'priority': self._calculate_priority(rank),
+                'url_type': 'root'
+            })
 
-                # www 버전도 추가 (옵션)
-                if add_www and not domain.startswith('www.'):
-                    urls.append({
-                        'url': f"{protocol}www.{domain}/",
-                        'rank': rank,
-                        'domain': f"www.{domain}",
-                        'priority': self._calculate_priority(rank) - 1,
-                        'url_type': 'www'
-                    })
-        
-        logger.info(f"URL 생성 완료: {len(urls)}개")
+        logger.info(f"URL 생성 완료: {len(urls)}개 (고유 도메인)")
         return urls
 
     def _calculate_priority(self, rank: int) -> int:
@@ -112,30 +100,6 @@ class TrancoManager:
         elif rank <= 10000: return 800
         elif rank <= 100000: return 700
         else: return 600
-
-    def generate_extended_urls(self, domain_data: List[Dict], common_paths: Optional[List[str]] = None) -> List[Dict]:
-        """도메인에서 확장 URL 생성"""
-        if common_paths is None:
-            common_paths = ['', 'about/', 'contact/', 'products/', 'services/', 'news/', 'blog/', 'support/', 'help/', 'privacy/', 'terms/', 'sitemap.xml', 'robots.txt']
-
-        extended_urls = []
-        for domain_info in domain_data[:1000]:  # 상위 1000개 도메인만
-            base_url = domain_info['url'].rstrip('/')
-            domain = domain_info['domain']
-            rank = domain_info['rank']
-            base_priority = domain_info['priority']
-
-            for i, path in enumerate(common_paths):
-                extended_urls.append({
-                    'url': f"{base_url}/{path}",
-                    'rank': rank,
-                    'domain': domain,
-                    'priority': base_priority - i - 10,
-                    'url_type': 'extended',
-                    'path': path
-                })
-        logger.info(f"확장 URL 생성 완료: {len(extended_urls)}개")
-        return extended_urls
 
     def save_urls_to_file(self, urls: List[Dict], filename: Optional[str] = None):
         """URL 리스트를 파일로 저장"""
@@ -150,34 +114,24 @@ class TrancoManager:
             logger.error(f"URL 리스트 저장 실패: {e}")
 
     async def prepare_url_dataset(self, initial_count: int = 10000) -> List[Dict]:
-        """URL 데이터셋 준비"""
-        logger.info(f"URL 데이터셋 준비 시작 (목표: {initial_count}개)")
+        """URL 데이터셋 준비 (1 도메인 = 1 URL)"""
+        logger.info(f"URL 데이터셋 준비 시작 (목표: {initial_count}개 도메인)")
 
-        # 1. Tranco 라이브러리로 목록 가져오기
-        # 도메인당 4개 URL 생성 (https, http, www https, www http)
-        domain_count_to_fetch = min(initial_count // 4, 250000)  # 최대 100만개 URL까지 지원
-        latest_tranco_list = await self.get_latest_list(limit=domain_count_to_fetch)
+        # 1. Tranco 라이브러리로 목록 가져오기 (요청한 count만큼 정확히 가져옴)
+        latest_tranco_list = await self.get_latest_list(limit=initial_count)
         if not latest_tranco_list:
             logger.error("Tranco 목록을 가져오지 못했습니다.")
             return []
 
-        # 2. 기본 URL 생성
-        basic_urls = self.parse_tranco_list_to_urls(latest_tranco_list, add_www=True)
+        # 2. 기본 URL 생성 (1 도메인 = 1 https URL)
+        urls = self.parse_tranco_list_to_urls(latest_tranco_list)
+        urls.sort(key=lambda x: x['priority'], reverse=True)
 
-        # 3. 확장 URL 생성
-        top_domains_for_extension = [url for url in basic_urls if url['rank'] <= 500]
-        extended_urls = self.generate_extended_urls(top_domains_for_extension, common_paths=['', 'about/', 'contact/', 'products/', 'news/'])
-        
-        all_urls = basic_urls + extended_urls
-        all_urls.sort(key=lambda x: x['priority'], reverse=True)
-        
-        final_urls = all_urls[:initial_count]
+        # 3. 파일로 저장
+        self.save_urls_to_file(urls)
 
-        # 4. 파일로 저장
-        self.save_urls_to_file(final_urls)
-
-        logger.info(f"URL 데이터셋 준비 완료: {len(final_urls)}개")
-        return final_urls
+        logger.info(f"URL 데이터셋 준비 완료: {len(urls)}개 (고유 도메인)")
+        return urls
 
 async def main():
     """테스트 실행"""
