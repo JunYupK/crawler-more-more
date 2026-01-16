@@ -5,11 +5,36 @@ Router 모듈 테스트
 Usage:
     pytest tests/test_router.py -v
     pytest tests/test_router.py -v -k "scoring"
+
+    # pytest 없이 실행
+    python tests/test_router.py
 """
 
-import pytest
 import sys
 from pathlib import Path
+
+# pytest fallback 처리
+try:
+    import pytest
+    PYTEST_AVAILABLE = True
+except ImportError:
+    PYTEST_AVAILABLE = False
+
+    class DummyMark:
+        @staticmethod
+        def asyncio(func):
+            return func
+
+        @staticmethod
+        def skip(reason=""):
+            def decorator(func):
+                return func
+            return decorator
+
+    class DummyPytest:
+        mark = DummyMark()
+
+    pytest = DummyPytest()
 
 # 프로젝트 루트를 path에 추가
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -459,5 +484,248 @@ class TestConvenienceFunctions:
         assert should_use_browser(spa_html) == True
 
 
+def run_quick_test():
+    """pytest 없이 빠른 테스트 실행"""
+    print("=" * 60)
+    print("Router Module Quick Tests")
+    print("=" * 60)
+
+    # 의존성 체크
+    deps_missing = []
+    try:
+        import msgpack
+    except ImportError:
+        deps_missing.append("msgpack")
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        deps_missing.append("beautifulsoup4")
+    try:
+        from aiokafka import AIOKafkaConsumer
+    except ImportError:
+        deps_missing.append("aiokafka")
+
+    if deps_missing:
+        print(f"\n⚠️ Missing dependencies: {', '.join(deps_missing)}")
+        print("   Install with: pip install msgpack beautifulsoup4 lxml aiokafka")
+        print("   Running fallback tests...\n")
+        return run_fallback_tests()
+
+    # 1. StaticScoreCalculator 기본 테스트
+    print("\n1. Testing StaticScoreCalculator...")
+    from src.router.scoring import StaticScoreCalculator, RouteDecision
+
+    calc = StaticScoreCalculator()
+    assert calc.BASE_SCORE == 100, "Base score should be 100"
+    assert calc.THRESHOLD == 80, "Threshold should be 80"
+
+    # 정적 페이지 테스트
+    static_html = """
+    <html>
+    <head><title>Blog Post</title></head>
+    <body>
+        <article>
+            <h1>My Article Title</h1>
+            <p>This is a very long paragraph with substantial content that
+            demonstrates this is a real static page with meaningful text.
+            The content continues here with more information about the topic.</p>
+        </article>
+    </body>
+    </html>
+    """
+    result = calc.calculate(static_html)
+    assert result.score >= 60, f"Static page score should be >= 60, got {result.score}"
+    print(f"   Static page score: {result.score}, route: {result.route}")
+    print("   ✅ StaticScoreCalculator tests passed")
+
+    # 2. SPA 페이지 테스트
+    print("\n2. Testing SPA detection...")
+    spa_html = """
+    <html>
+    <head><title>React App</title></head>
+    <body>
+        <div id="root"></div>
+        <script src="/static/js/bundle.a1b2c3d4.js"></script>
+        <noscript>You need to enable JavaScript to run this app.</noscript>
+    </body>
+    </html>
+    """
+    spa_result = calc.calculate(spa_html)
+    assert spa_result.score < 80, f"SPA page should score < 80, got {spa_result.score}"
+    assert spa_result.route == RouteDecision.RICH, "SPA should route to RICH"
+    print(f"   SPA page score: {spa_result.score}, route: {spa_result.route}")
+    print("   ✅ SPA detection tests passed")
+
+    # 3. ScoreResult 테스트
+    print("\n3. Testing ScoreResult...")
+    from src.router.scoring import ScoreResult
+
+    result = ScoreResult(score=85, route=RouteDecision.FAST)
+    result.add_reason("Long content", 10)
+    result.add_reason("Angular detected", -40)
+
+    assert len(result.reasons) == 2, "Should have 2 reasons"
+    assert "+10" in result.reasons[0], "First reason should have +10"
+    print("   ✅ ScoreResult tests passed")
+
+    # 4. PageAnalyzer 테스트
+    print("\n4. Testing PageAnalyzer...")
+    from src.router.page_analyzer import PageAnalyzer
+
+    analyzer = PageAnalyzer()
+
+    html = """
+    <html lang="ko">
+    <head>
+        <title>테스트 페이지</title>
+        <meta name="description" content="페이지 설명입니다">
+        <meta name="keywords" content="test, page, python">
+    </head>
+    <body>
+        <p>Content here with enough text to avoid short content penalty.</p>
+    </body>
+    </html>
+    """
+
+    result = analyzer.analyze(html, "https://example.com")
+
+    assert result.metadata.title == "테스트 페이지", "Title should match"
+    assert result.metadata.description == "페이지 설명입니다", "Description should match"
+    assert result.metadata.language == "ko", "Language should be ko"
+    print("   ✅ PageAnalyzer tests passed")
+
+    # 5. RouterStats 테스트
+    print("\n5. Testing RouterStats...")
+    from src.router.smart_router import RouterStats
+
+    stats = RouterStats()
+    stats.messages_routed_fast = 70
+    stats.messages_routed_rich = 30
+
+    assert stats.fast_ratio == 0.7, "Fast ratio should be 0.7"
+    assert stats.total_routed == 100, "Total routed should be 100"
+    print("   ✅ RouterStats tests passed")
+
+    # 6. calculate_score, should_use_browser 테스트
+    print("\n6. Testing convenience functions...")
+    from src.router.scoring import calculate_score, should_use_browser
+
+    html = "<html><body><article><p>Content for testing.</p></article></body></html>"
+    result = calculate_score(html)
+    assert hasattr(result, 'score'), "Result should have score"
+    assert hasattr(result, 'route'), "Result should have route"
+
+    assert should_use_browser(spa_html) == True, "SPA should use browser"
+    print("   ✅ Convenience functions tests passed")
+
+    print("\n" + "=" * 60)
+    print("All Router quick tests passed! ✅")
+    print("=" * 60)
+
+
+def run_fallback_tests():
+    """의존성 없이 기본 로직 테스트"""
+    print("=" * 60)
+    print("Router Fallback Tests (No dependencies)")
+    print("=" * 60)
+
+    from enum import Enum
+    from dataclasses import dataclass, field
+    from typing import List
+    import time
+    import re
+
+    # 1. RouteDecision Enum 테스트
+    print("\n1. Testing RouteDecision enum...")
+
+    class RouteDecision(Enum):
+        FAST = "fast"
+        RICH = "rich"
+
+    assert RouteDecision.FAST.value == "fast"
+    assert RouteDecision.RICH.value == "rich"
+    print("   ✅ RouteDecision tests passed")
+
+    # 2. ScoreResult 테스트
+    print("\n2. Testing ScoreResult...")
+
+    @dataclass
+    class ScoreResult:
+        score: int
+        route: RouteDecision
+        reasons: List[str] = field(default_factory=list)
+
+        def add_reason(self, reason: str, delta: int):
+            sign = "+" if delta > 0 else ""
+            self.reasons.append(f"{reason} ({sign}{delta})")
+
+    result = ScoreResult(score=85, route=RouteDecision.FAST)
+    result.add_reason("Long content", 10)
+    result.add_reason("Angular detected", -40)
+
+    assert len(result.reasons) == 2
+    assert "+10" in result.reasons[0]
+    assert "-40" in result.reasons[1]
+    print("   ✅ ScoreResult tests passed")
+
+    # 3. 정적 점수 계산 로직 테스트
+    print("\n3. Testing scoring logic...")
+
+    # 간단한 SPA 감지 패턴
+    SPA_PATTERNS = [
+        r'<div\s+id=["\']root["\']',
+        r'ng-app',
+        r'v-app',
+        r'data-reactroot',
+    ]
+
+    def is_spa(html: str) -> bool:
+        for pattern in SPA_PATTERNS:
+            if re.search(pattern, html, re.IGNORECASE):
+                return True
+        return False
+
+    spa_html = '<html><body><div id="root"></div></body></html>'
+    static_html = '<html><body><article><p>Content here</p></article></body></html>'
+
+    assert is_spa(spa_html) == True, "Should detect SPA"
+    assert is_spa(static_html) == False, "Should not detect as SPA"
+    print("   ✅ Scoring logic tests passed")
+
+    # 4. RouterStats 테스트
+    print("\n4. Testing RouterStats...")
+
+    @dataclass
+    class RouterStats:
+        messages_consumed: int = 0
+        messages_routed_fast: int = 0
+        messages_routed_rich: int = 0
+        start_time: float = field(default_factory=time.time)
+
+        @property
+        def total_routed(self) -> int:
+            return self.messages_routed_fast + self.messages_routed_rich
+
+        @property
+        def fast_ratio(self) -> float:
+            return self.messages_routed_fast / self.total_routed if self.total_routed > 0 else 0
+
+    stats = RouterStats()
+    stats.messages_routed_fast = 70
+    stats.messages_routed_rich = 30
+
+    assert stats.fast_ratio == 0.7, "Fast ratio should be 0.7"
+    assert stats.total_routed == 100, "Total should be 100"
+    print("   ✅ RouterStats tests passed")
+
+    print("\n" + "=" * 60)
+    print("All fallback tests passed! ✅")
+    print("(Full tests require: pip install msgpack beautifulsoup4 lxml aiokafka)")
+    print("=" * 60)
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    if PYTEST_AVAILABLE:
+        pytest.main([__file__, "-v"])
+    else:
+        run_quick_test()

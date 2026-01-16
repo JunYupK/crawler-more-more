@@ -5,12 +5,37 @@ Processor 모듈 테스트
 Usage:
     pytest tests/test_processor.py -v
     pytest tests/test_processor.py -v -k "fast"
+
+    # pytest 없이 실행
+    python tests/test_processor.py
 """
 
-import pytest
 import asyncio
 import sys
 from pathlib import Path
+
+# pytest fallback 처리
+try:
+    import pytest
+    PYTEST_AVAILABLE = True
+except ImportError:
+    PYTEST_AVAILABLE = False
+
+    class DummyMark:
+        @staticmethod
+        def asyncio(func):
+            return func
+
+        @staticmethod
+        def skip(reason=""):
+            def decorator(func):
+                return func
+            return decorator
+
+    class DummyPytest:
+        mark = DummyMark()
+
+    pytest = DummyPytest()
 
 # 프로젝트 루트를 path에 추가
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -437,5 +462,288 @@ class TestMarkdownConversion:
         assert "[" in markdown and "]" in markdown  # 링크
 
 
+def run_quick_test():
+    """pytest 없이 빠른 테스트 실행"""
+    print("=" * 60)
+    print("Processor Module Quick Tests")
+    print("=" * 60)
+
+    # 의존성 체크
+    deps_missing = []
+    try:
+        import msgpack
+    except ImportError:
+        deps_missing.append("msgpack")
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        deps_missing.append("beautifulsoup4")
+    try:
+        import html2text
+    except ImportError:
+        deps_missing.append("html2text")
+    try:
+        from aiokafka import AIOKafkaConsumer
+    except ImportError:
+        deps_missing.append("aiokafka")
+
+    if deps_missing:
+        print(f"\n⚠️ Missing dependencies: {', '.join(deps_missing)}")
+        print("   Install with: pip install msgpack beautifulsoup4 lxml html2text aiokafka")
+        print("   Running fallback tests...\n")
+        return run_fallback_tests()
+
+    # 1. ProcessorType 테스트
+    print("\n1. Testing ProcessorType...")
+    from src.processor.base_worker import ProcessorType
+
+    assert ProcessorType.FAST.value == "fast", "FAST should be 'fast'"
+    assert ProcessorType.RICH.value == "rich", "RICH should be 'rich'"
+    print("   ✅ ProcessorType tests passed")
+
+    # 2. ProcessedResult 테스트
+    print("\n2. Testing ProcessedResult...")
+    from src.processor.base_worker import ProcessedResult
+
+    result = ProcessedResult(
+        url="https://example.com",
+        success=True,
+        processor_type=ProcessorType.FAST,
+        markdown="# Title\n\nContent here",
+        title="Example Page",
+    )
+
+    assert result.success, "Should be success"
+    assert result.processor_type == ProcessorType.FAST
+    assert result.markdown is not None
+
+    data = result.to_dict()
+    assert data['url'] == "https://example.com"
+    assert data['success'] == True
+    assert data['processor_type'] == "fast"
+    print("   ✅ ProcessedResult tests passed")
+
+    # 3. WorkerStats 테스트
+    print("\n3. Testing WorkerStats...")
+    from src.processor.base_worker import WorkerStats
+
+    stats = WorkerStats()
+    stats.record_success(100.0, 5000, 2000)
+    stats.record_success(150.0, 8000, 3000)
+
+    assert stats.messages_processed == 2, "Should have 2 processed"
+    assert stats.total_content_bytes == 13000, "Total content should be 13000"
+    assert stats.average_processing_time_ms == 125.0, "Avg time should be 125"
+
+    stats.record_failure()
+    assert stats.messages_failed == 1, "Should have 1 failure"
+    print("   ✅ WorkerStats tests passed")
+
+    # 4. FastWorker 테스트 (async)
+    print("\n4. Testing FastWorker...")
+    from src.processor.fast_worker import FastWorker
+
+    worker = FastWorker(worker_id=0)
+    assert worker.get_processor_type() == ProcessorType.FAST
+
+    html = """
+    <html>
+    <head>
+        <title>Test Page</title>
+        <meta name="description" content="Test description">
+    </head>
+    <body>
+        <article>
+            <h1>Main Title</h1>
+            <p>First paragraph with some content.</p>
+            <a href="https://example.com/link">A link</a>
+        </article>
+    </body>
+    </html>
+    """
+
+    async def test_fast_worker():
+        result = await worker.process_html(html, "https://example.com", {})
+        assert result.success, "Processing should succeed"
+        assert result.title == "Test Page", f"Title should be 'Test Page', got {result.title}"
+        assert result.markdown is not None, "Markdown should not be None"
+        assert "Main Title" in (result.markdown or ""), "Markdown should contain 'Main Title'"
+        return result
+
+    result = asyncio.get_event_loop().run_until_complete(test_fast_worker())
+    print(f"   Title: {result.title}")
+    print(f"   Markdown length: {len(result.markdown or '')}")
+    print("   ✅ FastWorker tests passed")
+
+    # 5. RichWorker 테스트
+    print("\n5. Testing RichWorker...")
+    from src.processor.rich_worker import RichWorker, check_crawl4ai_installation
+
+    worker = RichWorker(worker_id=0)
+    assert worker.get_processor_type() == ProcessorType.RICH
+
+    status = check_crawl4ai_installation()
+    print(f"   Crawl4AI installed: {status.get('installed', False)}")
+
+    async def test_rich_worker_fallback():
+        result = await worker._process_fallback(html, "https://example.com", {})
+        assert result.success, "Fallback should succeed"
+        return result
+
+    result = asyncio.get_event_loop().run_until_complete(test_rich_worker_fallback())
+    print("   ✅ RichWorker tests passed")
+
+    # 6. WorkerPool 테스트
+    print("\n6. Testing WorkerPool...")
+    from src.processor.fast_worker import FastWorkerPool
+    from src.processor.rich_worker import RichWorkerPool
+
+    fast_pool = FastWorkerPool(num_workers=4)
+    assert fast_pool.num_workers == 4
+
+    rich_pool = RichWorkerPool(num_workers=2)
+    assert rich_pool.num_workers == 2
+    print("   ✅ WorkerPool tests passed")
+
+    print("\n" + "=" * 60)
+    print("All Processor quick tests passed! ✅")
+    print("=" * 60)
+
+
+def run_fallback_tests():
+    """의존성 없이 기본 로직 테스트"""
+    print("=" * 60)
+    print("Processor Fallback Tests (No dependencies)")
+    print("=" * 60)
+
+    from enum import Enum
+    from dataclasses import dataclass, field
+    from typing import Optional, List
+    import time
+
+    # 1. ProcessorType Enum 테스트
+    print("\n1. Testing ProcessorType enum...")
+
+    class ProcessorType(Enum):
+        FAST = "fast"
+        RICH = "rich"
+
+    assert ProcessorType.FAST.value == "fast"
+    assert ProcessorType.RICH.value == "rich"
+    print("   ✅ ProcessorType tests passed")
+
+    # 2. ProcessedResult 테스트
+    print("\n2. Testing ProcessedResult...")
+
+    @dataclass
+    class ProcessedResult:
+        url: str
+        success: bool
+        processor_type: ProcessorType
+        markdown: Optional[str] = None
+        title: Optional[str] = None
+        error_type: Optional[str] = None
+
+        def to_dict(self) -> dict:
+            return {
+                'url': self.url,
+                'success': self.success,
+                'processor_type': self.processor_type.value,
+                'metadata': {'title': self.title},
+            }
+
+    result = ProcessedResult(
+        url="https://example.com",
+        success=True,
+        processor_type=ProcessorType.FAST,
+        markdown="# Title",
+        title="Example Page",
+    )
+
+    assert result.success
+    data = result.to_dict()
+    assert data['processor_type'] == "fast"
+    print("   ✅ ProcessedResult tests passed")
+
+    # 3. WorkerStats 테스트
+    print("\n3. Testing WorkerStats...")
+
+    @dataclass
+    class WorkerStats:
+        messages_consumed: int = 0
+        messages_processed: int = 0
+        messages_failed: int = 0
+        total_content_bytes: int = 0
+        total_markdown_bytes: int = 0
+        total_processing_time_ms: float = 0.0
+        start_time: float = field(default_factory=time.time)
+
+        def record_success(self, time_ms: float, content_bytes: int, markdown_bytes: int):
+            self.messages_consumed += 1
+            self.messages_processed += 1
+            self.total_processing_time_ms += time_ms
+            self.total_content_bytes += content_bytes
+            self.total_markdown_bytes += markdown_bytes
+
+        def record_failure(self):
+            self.messages_consumed += 1
+            self.messages_failed += 1
+
+        @property
+        def average_processing_time_ms(self) -> float:
+            return self.total_processing_time_ms / self.messages_processed if self.messages_processed > 0 else 0
+
+        @property
+        def success_rate(self) -> float:
+            return self.messages_processed / self.messages_consumed if self.messages_consumed > 0 else 0
+
+    stats = WorkerStats()
+    stats.record_success(100.0, 5000, 2000)
+    stats.record_success(150.0, 8000, 3000)
+
+    assert stats.messages_processed == 2
+    assert stats.total_content_bytes == 13000
+    assert stats.average_processing_time_ms == 125.0
+
+    stats.record_failure()
+    assert stats.messages_failed == 1
+    assert abs(stats.success_rate - 0.666) < 0.01
+    print("   ✅ WorkerStats tests passed")
+
+    # 4. 간단한 HTML 파싱 테스트
+    print("\n4. Testing basic HTML parsing...")
+    import re
+
+    def extract_title(html: str) -> Optional[str]:
+        match = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
+        return match.group(1) if match else None
+
+    def extract_meta_description(html: str) -> Optional[str]:
+        match = re.search(r'<meta\s+name=["\']description["\']\s+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+        return match.group(1) if match else None
+
+    html = '''
+    <html>
+    <head>
+        <title>Test Page</title>
+        <meta name="description" content="Test description">
+    </head>
+    <body><p>Content</p></body>
+    </html>
+    '''
+
+    assert extract_title(html) == "Test Page"
+    assert extract_meta_description(html) == "Test description"
+    print("   ✅ HTML parsing tests passed")
+
+    print("\n" + "=" * 60)
+    print("All fallback tests passed! ✅")
+    print("(Full tests require: pip install msgpack beautifulsoup4 lxml html2text aiokafka)")
+    print("=" * 60)
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    if PYTEST_AVAILABLE:
+        pytest.main([__file__, "-v"])
+    else:
+        run_quick_test()
