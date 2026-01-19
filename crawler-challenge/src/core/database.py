@@ -75,40 +75,35 @@ class DatabaseManager:
         except:
             return "unknown"
 
-    def extract_title_from_html(self, html_content: str) -> str:
-        """HTML에서 title 태그 추출"""
+    def extract_title_from_html(self, html_content: str = None, soup=None) -> str:
+        """HTML에서 title 태그 추출 (soup 객체 재사용 가능)"""
         try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html_content, 'html.parser')
+            if soup is None:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(html_content, 'html.parser')
             title_tag = soup.find('title')
             return title_tag.get_text().strip() if title_tag else ""
         except Exception as e:
             logger.warning(f"Title 추출 실패: {e}")
             return ""
 
-    def create_metadata(self, html_content: str, url: str) -> Dict[str, Any]:
-        """메타데이터 생성"""
+    def create_metadata(self, html_content: str = None, url: str = "", soup=None) -> Dict[str, Any]:
+        """메타데이터 생성 (간소화 버전 - soup 객체 재사용)"""
         metadata = {
-            'content_length': len(html_content),
+            'content_length': len(html_content) if html_content else 0,
             'url_path': urlparse(url).path,
-            'has_title': bool(self.extract_title_from_html(html_content)),
         }
 
-        # 추가 메타데이터 (선택적)
+        # 추가 메타데이터 (간소화 - find_all 제거로 성능 향상)
         try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html_content, 'html.parser')
+            if soup is None:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(html_content, 'html.parser')
 
-            # 메타 태그 수집
+            # 메타 태그 수집만 유지 (find는 빠름, find_all은 느림)
             meta_description = soup.find('meta', attrs={'name': 'description'})
             if meta_description:
                 metadata['description'] = meta_description.get('content', '')[:500]
-
-            # 링크 수
-            metadata['link_count'] = len(soup.find_all('a'))
-
-            # 이미지 수
-            metadata['image_count'] = len(soup.find_all('img'))
 
         except Exception as e:
             logger.warning(f"메타데이터 생성 중 오류: {e}")
@@ -116,20 +111,26 @@ class DatabaseManager:
         return metadata
 
     def add_to_batch(self, url: str, html_content: str):
-        """배치에 데이터 추가"""
+        """배치에 데이터 추가 (최적화: BeautifulSoup 1번만 파싱)"""
         # 이미 배치에 있는 URL인지 확인 (중복 방지)
         if any(item['url'] == url for item in self.batch_buffer):
             logger.warning(f"Duplicate URL in batch, skipping: {url}")
             return
 
         domain = self.extract_domain(url)
-        title = self.extract_title_from_html(html_content)
-        metadata = self.create_metadata(html_content, url)
 
-        # 텍스트 추출 (BeautifulSoup 사용)
+        # ===== 최적화: BeautifulSoup을 1번만 생성하고 재사용 =====
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(html_content, 'html.parser')
+
+            # 1. title 추출 (soup 재사용)
+            title = self.extract_title_from_html(soup=soup)
+
+            # 2. metadata 생성 (soup 재사용, find_all 제거로 간소화)
+            metadata = self.create_metadata(html_content=html_content, url=url, soup=soup)
+
+            # 3. 텍스트 추출 (동일한 soup 객체 사용)
             # 스크립트와 스타일 태그 제거
             for script in soup(["script", "style"]):
                 script.decompose()
@@ -137,9 +138,12 @@ class DatabaseManager:
             # 공백 정리
             content_text = ' '.join(content_text.split())
         except Exception as e:
-            logger.warning(f"텍스트 추출 실패: {e}")
+            logger.warning(f"HTML 파싱 실패: {e}")
+            title = ""
             content_text = ""
+            metadata = {'content_length': len(html_content), 'url_path': urlparse(url).path}
 
+        # NUL 바이트 제거 (PostgreSQL 호환성)
         if title:
             title = title.replace('\x00', '')
         if content_text:
