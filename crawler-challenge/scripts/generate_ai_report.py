@@ -146,14 +146,21 @@ class MetricsCollector:
             logger.warning(f"즉시 쿼리 실패 ({query}): {e}")
             return []
 
-    def collect_crawler_metrics(self, time_range_minutes: int = 60) -> Dict[str, Any]:
-        """크롤러 관련 메트릭 수집"""
+    def collect_crawler_metrics(self, time_range_minutes: int = 60, error_metrics_time_range: int = 60) -> Dict[str, Any]:
+        """크롤러 관련 메트릭 수집
+
+        Args:
+            time_range_minutes: 일반 메트릭 수집 시간 범위 (분)
+            error_metrics_time_range: 에러 메트릭 수집 시간 범위 (분, 기본값: 60)
+        """
         end_time = datetime.now()
         start_time = end_time - timedelta(minutes=time_range_minutes)
+        error_start_time = end_time - timedelta(minutes=error_metrics_time_range)
 
         metrics = {
             "collection_time": datetime.now().isoformat(),
             "time_range_minutes": time_range_minutes,
+            "error_metrics_time_range_minutes": error_metrics_time_range,
             "data": {}
         }
 
@@ -239,14 +246,31 @@ class MetricsCollector:
             "crawl_domain_error_rate_top10": "topk(10, sum by (domain) (domain_failures_total) / (sum by (domain) (domain_failures_total) + sum by (domain) (crawl_requests_total{status='success'})) * 100)",
         }
 
+        # 에러 관련 메트릭들 (1시간으로 제한)
+        error_metrics = {
+            "crawl_errors_by_type",
+            "crawl_errors_by_domain_top10",
+            "crawl_http_status_distribution",
+            "crawl_error_rate_trend",
+            "crawl_domain_error_rate_top10"
+        }
+
         for metric_name, query in queries.items():
             try:
+                # 에러 메트릭인지 확인하여 적절한 시간 범위 사용
+                if metric_name in error_metrics:
+                    query_start_time = error_start_time
+                    logger.debug(f"에러 메트릭 {metric_name}: {error_metrics_time_range}분 범위 사용")
+                else:
+                    query_start_time = start_time
+
                 # 범위 쿼리 시도
-                range_data = self.query_range(query, start_time, end_time)
+                range_data = self.query_range(query, query_start_time, end_time)
                 if range_data:
                     metrics["data"][metric_name] = {
                         "type": "range",
-                        "values": self._extract_values(range_data)
+                        "values": self._extract_values(range_data),
+                        "time_range_used": error_metrics_time_range if metric_name in error_metrics else time_range_minutes
                     }
                 else:
                     # 즉시 쿼리 시도
@@ -254,7 +278,8 @@ class MetricsCollector:
                     if instant_data:
                         metrics["data"][metric_name] = {
                             "type": "instant",
-                            "value": self._extract_instant_value(instant_data)
+                            "value": self._extract_instant_value(instant_data),
+                            "time_range_used": "instant"
                         }
             except Exception as e:
                 logger.debug(f"메트릭 수집 실패 ({metric_name}): {e}")
@@ -689,6 +714,9 @@ def main():
     # 자동 시간 범위 계산 시도
     session_time = collector.get_session_time_range()
 
+    # 에러 메트릭은 항상 1시간(60분)으로 제한
+    error_metrics_range = 60
+
     if session_time and not args.time_range:
         # 자동 계산 성공
         duration = int(session_time['duration_minutes']) + 5  # 여유 5분
@@ -696,15 +724,17 @@ def main():
         logger.info(f"     시작: {session_time['start'].strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"     종료: {session_time['end'].strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"     범위: {session_time['duration_minutes']:.1f}분 (여유 +5분 = {duration}분)")
-        metrics = collector.collect_crawler_metrics(duration)
+        logger.info(f"     에러 메트릭 범위: {error_metrics_range}분 (고정)")
+        metrics = collector.collect_crawler_metrics(duration, error_metrics_range)
     else:
         # 수동 지정 또는 fallback
         time_range = args.time_range if args.time_range else 60
         if args.time_range:
             logger.info(f"  ⚙️  수동 시간 범위 사용: {time_range}분")
+            logger.info(f"     에러 메트릭 범위: {error_metrics_range}분 (고정)")
         else:
             logger.info(f"  ⚠️  세션 시간 조회 실패, 기본값 사용: {time_range}분")
-        metrics = collector.collect_crawler_metrics(time_range)
+        metrics = collector.collect_crawler_metrics(time_range, error_metrics_range)
 
     logger.info(f"  - 수집된 메트릭 수: {len(metrics.get('data', {}))}")
 

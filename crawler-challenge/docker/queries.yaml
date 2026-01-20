@@ -1,16 +1,25 @@
-# postgres_exporter Custom Queries
+# postgres_exporter Custom Queries (Optimized for Large Data)
 # Prometheus에서 SQL 쿼리 결과를 메트릭으로 수집
+# 최적화: 최근 데이터만 집계하여 쿼리 성능 향상
 
 pg_crawler_stats:
   query: |
+    WITH recent_data AS (
+      SELECT
+        domain,
+        content_text,
+        created_at
+      FROM crawled_pages
+      WHERE created_at > NOW() - INTERVAL '24 hours'  -- 최근 24시간만
+    )
     SELECT
-      COUNT(*) as total_pages,
+      (SELECT COUNT(*) FROM crawled_pages) as total_pages,  -- 전체 개수는 별도 쿼리
       COUNT(CASE WHEN created_at > NOW() - INTERVAL '1 minute' THEN 1 END) as pages_last_1min,
       COUNT(CASE WHEN created_at > NOW() - INTERVAL '5 minutes' THEN 1 END) as pages_last_5min,
       COUNT(CASE WHEN created_at > NOW() - INTERVAL '1 hour' THEN 1 END) as pages_last_1hour,
       COUNT(DISTINCT domain) as unique_domains,
       COALESCE(AVG(LENGTH(content_text)), 0)::bigint as avg_content_length
-    FROM crawled_pages
+    FROM recent_data
   metrics:
     - total_pages:
         usage: "GAUGE"
@@ -26,10 +35,10 @@ pg_crawler_stats:
         description: "Pages crawled in the last 1 hour"
     - unique_domains:
         usage: "GAUGE"
-        description: "Number of unique domains crawled"
+        description: "Number of unique domains in last 24h"
     - avg_content_length:
         usage: "GAUGE"
-        description: "Average content length in bytes"
+        description: "Average content length in bytes (last 24h)"
 
 pg_crawler_dlq:
   query: |
@@ -67,27 +76,47 @@ pg_crawler_throughput:
         usage: "GAUGE"
         description: "Current crawling throughput (pages/second)"
 
+# 최적화: 최근 24시간 데이터만 집계
 pg_domain_stats:
   query: |
+    WITH recent_domains AS (
+      SELECT domain, COUNT(*) as page_count
+      FROM crawled_pages
+      WHERE created_at > NOW() - INTERVAL '24 hours'
+      GROUP BY domain
+    )
     SELECT
       'total' as metric_type,
       COUNT(DISTINCT domain)::bigint as domain_count
-    FROM crawled_pages
+    FROM recent_domains
     UNION ALL
     SELECT
       'top_10_total' as metric_type,
-      SUM(page_count)::bigint as domain_count
+      COALESCE(SUM(page_count)::bigint, 0) as domain_count
     FROM (
-      SELECT COUNT(*) as page_count
-      FROM crawled_pages
-      GROUP BY domain
+      SELECT page_count
+      FROM recent_domains
       ORDER BY page_count DESC
       LIMIT 10
     ) top_domains
   metrics:
     - metric_type:
         usage: "LABEL"
-        description: "Type of domain metric"
+        description: "Type of domain metric (last 24h)"
     - domain_count:
         usage: "GAUGE"
-        description: "Domain count metric"
+        description: "Domain count metric (last 24h)"
+
+# 추가: 전체 통계는 캐시된 값 사용 (선택적)
+pg_crawler_total_stats:
+  query: |
+    SELECT
+      (SELECT reltuples::bigint FROM pg_class WHERE relname = 'crawled_pages') as estimated_total_pages,
+      (SELECT COUNT(DISTINCT domain) FROM crawled_pages WHERE created_at > NOW() - INTERVAL '1 hour') as unique_domains_1h
+  metrics:
+    - estimated_total_pages:
+        usage: "GAUGE"
+        description: "Estimated total pages (fast count using pg_class)"
+    - unique_domains_1h:
+        usage: "GAUGE"
+        description: "Unique domains in last 1 hour"
