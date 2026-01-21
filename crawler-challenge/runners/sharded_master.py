@@ -304,8 +304,62 @@ class ShardedCrawlerMaster:
             logging.error(f"AI 리포트 생성 중 오류: {e}")
             # 리포트 생성 실패해도 크롤링은 성공으로 처리
 
-    async def run(self, url_count: int = 400):
-        """샤딩 마스터 실행"""
+    def wait_for_start_signal(self, url_count: int) -> bool:
+        """
+        사용자로부터 크롤링 시작 신호 대기
+
+        Returns:
+            True: 시작, False: 취소
+        """
+        print("\n" + "=" * 60)
+        print("🚀 크롤링 준비 완료")
+        print("=" * 60)
+        print(f"   URL 개수: {url_count:,}개")
+        print(f"   워커 수: {self.worker_count}개")
+        print(f"   샤드 수: {self.queue_manager.num_shards}개")
+        print("=" * 60)
+        print("\n📋 명령어:")
+        print("   start  - 크롤링 시작")
+        print("   status - 현재 상태 확인")
+        print("   quit   - 종료")
+        print("-" * 60)
+
+        while True:
+            try:
+                user_input = input("\n입력 (start/status/quit): ").strip().lower()
+
+                if user_input == 'start':
+                    print("\n✅ 크롤링을 시작합니다...")
+                    return True
+                elif user_input == 'status':
+                    queue_stats = self.queue_manager.get_queue_stats()
+                    print(f"\n📊 현재 상태:")
+                    print(f"   - 총 URL: {queue_stats.get('total_urls', 0)}개")
+                    print(f"   - 대기 중: {queue_stats.get('total_pending', 0)}개")
+                    print(f"   - 완료: {queue_stats.get('completed', 0)}개")
+                    print(f"   - 실패: {queue_stats.get('failed', 0)}개")
+                elif user_input in ['quit', 'q', 'exit']:
+                    print("\n❌ 크롤링이 취소되었습니다.")
+                    return False
+                else:
+                    print("⚠️  알 수 없는 명령어입니다. (start/status/quit)")
+
+            except EOFError:
+                # 비대화형 환경에서는 자동 시작
+                print("\n비대화형 환경 감지 - 자동 시작합니다...")
+                return True
+            except KeyboardInterrupt:
+                print("\n\n❌ 사용자에 의해 취소되었습니다.")
+                return False
+
+    async def run(self, url_count: int = 400, auto_start: bool = False):
+        """
+        샤딩 마스터 실행
+
+        Args:
+            url_count: 크롤링할 URL 개수
+            auto_start: True면 즉시 시작, False면 사용자 입력 대기
+        """
         try:
             # 초기화
             if not await self.initialize():
@@ -316,6 +370,12 @@ class ShardedCrawlerMaster:
             if not await self.prepare_work(url_count):
                 logging.error("샤딩된 작업 준비 실패")
                 return False
+
+            # 자동 시작이 아닌 경우 사용자 입력 대기
+            if not auto_start:
+                if not self.wait_for_start_signal(url_count):
+                    logging.info("사용자에 의해 크롤링이 취소되었습니다.")
+                    return False
 
             # 워커 모니터링
             await self.monitor_workers()
@@ -330,14 +390,22 @@ async def main():
     parser = argparse.ArgumentParser(description='Sharded Distributed Crawler - Master')
     parser.add_argument('--count', type=int, default=400, help='크롤링할 URL 개수')
     parser.add_argument('--workers', type=int, default=4, help='워커 수')
-    
+    parser.add_argument('--auto-start', action='store_true',
+                        help='즉시 크롤링 시작 (기본: 사용자 입력 대기)')
+
     args = parser.parse_args()
 
     setup_logging()
-    
+
     print(f"샤딩된 분산 크롤러 마스터 시작 (워커 {args.workers}개, URL {args.count}개)")
+
+    if args.auto_start:
+        print("⚡ 자동 시작 모드")
+    else:
+        print("⏳ 수동 시작 모드 (시작 신호 대기)")
+
     master = ShardedCrawlerMaster(worker_count=args.workers)
-    success = await master.run(url_count=args.count)
+    success = await master.run(url_count=args.count, auto_start=args.auto_start)
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
