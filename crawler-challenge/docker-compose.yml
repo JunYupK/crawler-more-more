@@ -52,7 +52,10 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     container_name: crawler-master
-    # 실제 실행 명령어 (테스트 끝났으면 주석 해제)
+    # 대화형 입력 활성화 (start 명령 대기)
+    stdin_open: true  # docker run -i
+    tty: true         # docker run -t
+    # 실제 실행 명령어 (--auto-start 없으면 사용자 입력 대기)
     command: python runners/sharded_master.py --count 1000000 --workers 8
     environment:
       # 같은 도커 네트워크라 서비스명(redis, postgres)으로 접속 가능
@@ -72,7 +75,7 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy # DB가 쿼리 받을 준비가 되면 실행
-    restart: on-failure
+    restart: "no"  # 사용자 입력 대기 모드에서는 자동 재시작 비활성화
 
   crawler-worker-1:
     build:

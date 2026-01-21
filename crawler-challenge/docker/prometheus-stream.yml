@@ -1,0 +1,84 @@
+# Prometheus Configuration for Stream Pipeline
+# Scrape targets for Kafka, MinIO, and Application metrics
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'crawler-stream-pipeline'
+
+# Alerting (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Application metrics - Ingestor (Mac)
+  - job_name: 'ingestor'
+    static_configs:
+      - targets: ['host.docker.internal:8100']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Application metrics - Router
+  - job_name: 'router'
+    static_configs:
+      - targets: ['router:8200']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Application metrics - Fast Workers
+  - job_name: 'fast-worker'
+    static_configs:
+      - targets:
+          - 'fast-worker-1:8300'
+          - 'fast-worker-2:8300'
+          - 'fast-worker-3:8300'
+          - 'fast-worker-4:8300'
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Application metrics - Rich Workers (Crawl4AI)
+  - job_name: 'rich-worker'
+    static_configs:
+      - targets:
+          - 'rich-worker-1:8400'
+          - 'rich-worker-2:8400'
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Application metrics - Storage Writer
+  - job_name: 'storage-writer'
+    static_configs:
+      - targets: ['storage-writer:8500']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Kafka JMX metrics (if configured)
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9999']
+    metrics_path: /metrics
+
+  # MinIO metrics
+  - job_name: 'minio'
+    static_configs:
+      - targets: ['minio:9000']
+    metrics_path: /minio/v2/metrics/cluster
+
+  # Redis metrics (using redis_exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # PostgreSQL metrics
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
