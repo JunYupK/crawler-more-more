@@ -91,7 +91,6 @@ python runners/sharded_master.py --workers 8
 docker-compose up -d --scale crawler-worker=6
 ```
 
-> 📖 **상세 설정은** [DEPLOY.md](./crawler-challenge/docs/DEPLOY.md) **참고**
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -229,7 +228,6 @@ docker-compose up -d --scale crawler-worker=6
 └───────────────────┴───────────────────┴───────────────────┘
 ```
 
-> 📖 **상세 설정은** [MONITORING.md](./crawler-challenge/docs/MONITORING.md) **참고**
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -252,7 +250,6 @@ Code Push ──► CI Test ──► Docker Build ──► Registry
 | `pr-automation.yml` | PR 생성 | Conventional Commits 검증, 라벨링 |
 | `release.yml` | 버전 태그 | GitHub Release, Changelog |
 
-> 📖 **상세 설정은** [CI_CD.md](./crawler-challenge/docs/CI_CD.md) **참고**
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
