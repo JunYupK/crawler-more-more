@@ -1,0 +1,8 @@
+# Mac Ingestor Requirements
+# 맥북에서 크롤링 레이어만 실행할 때 필요한 의존성
+httpx[http2]>=0.25.0
+zstandard>=0.22.0
+aiokafka>=0.10.0
+msgpack>=1.0.7
+python-dotenv>=1.0.0
+tranco

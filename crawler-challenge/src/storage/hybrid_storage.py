@@ -17,9 +17,7 @@ from dataclasses import dataclass, field
 import msgpack
 from aiokafka import AIOKafkaConsumer
 
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config
+from src.common.kafka_config import get_config
 from src.storage.minio_writer import MinIOWriter, StoredObject
 from src.storage.postgres_writer import PostgresWriter, PageRecord
 
@@ -206,6 +204,10 @@ class HybridStorage:
 
         logger.info("Starting storage loop...")
         processed = 0
+        uncommitted = 0
+        last_commit_time = time.time()
+        COMMIT_INTERVAL_SEC = 5.0
+        COMMIT_BATCH_SIZE = 100
 
         try:
             async for message in self._consumer:
@@ -220,8 +222,14 @@ class HybridStorage:
                         if callback:
                             callback(result)
 
-                    # 오프셋 커밋
-                    await self._consumer.commit()
+                    uncommitted += 1
+
+                    # 배치 단위 오프셋 커밋 (100건 또는 5초 주기)
+                    now = time.time()
+                    if uncommitted >= COMMIT_BATCH_SIZE or (now - last_commit_time) >= COMMIT_INTERVAL_SEC:
+                        await self._consumer.commit()
+                        uncommitted = 0
+                        last_commit_time = now
 
                     processed += 1
 
@@ -243,6 +251,12 @@ class HybridStorage:
         except Exception as e:
             logger.error(f"Error in storage loop: {e}", exc_info=True)
         finally:
+            # 남은 오프셋 커밋
+            if uncommitted > 0 and self._consumer:
+                try:
+                    await self._consumer.commit()
+                except Exception:
+                    pass
             logger.info(f"Storage loop ended. Processed: {processed}")
 
     async def _store_message(self, message: dict) -> Optional[StorageResult]:

@@ -19,9 +19,7 @@ from urllib.parse import urlparse
 import asyncpg
 from asyncpg import Pool, Connection
 
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config, PostgresConfig
+from src.common.kafka_config import get_config, PostgresConfig
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +133,7 @@ class PostgresWriter:
     - 자동 재연결
     """
 
-    # 배치 삽입 쿼리
+    # 배치 삽입 쿼리 (executemany 호환 - RETURNING 제거)
     UPSERT_QUERY = """
         INSERT INTO pages (
             url, domain, title, description, language, keywords,
@@ -168,7 +166,6 @@ class PostgresWriter:
             content_type = EXCLUDED.content_type,
             processed_at = EXCLUDED.processed_at,
             version = pages.version + 1
-        RETURNING (xmax = 0) AS inserted
     """
 
     def __init__(
@@ -280,55 +277,48 @@ class PostgresWriter:
             return 0, len(records)
 
         start_time = time.time()
-        inserted = 0
-        updated = 0
+        succeeded = 0
         failed = 0
 
         try:
+            # 레코드를 튜플 리스트로 변환
+            args = [
+                (
+                    record.url,
+                    record.domain,
+                    record.title,
+                    record.description,
+                    record.language,
+                    record.keywords,
+                    record.processor,
+                    record.static_score,
+                    record.route_reason,
+                    record.raw_html_key,
+                    record.markdown_key,
+                    record.raw_size_bytes,
+                    record.markdown_size_bytes,
+                    record.status_code,
+                    record.content_type,
+                    record.crawled_at,
+                    record.processed_at or datetime.now(timezone.utc),
+                )
+                for record in records
+            ]
+
             async with self._pool.acquire() as conn:
-                # 배치 UPSERT
-                for record in records:
-                    try:
-                        result = await conn.fetchrow(
-                            self.UPSERT_QUERY,
-                            record.url,
-                            record.domain,
-                            record.title,
-                            record.description,
-                            record.language,
-                            record.keywords,
-                            record.processor,
-                            record.static_score,
-                            record.route_reason,
-                            record.raw_html_key,
-                            record.markdown_key,
-                            record.raw_size_bytes,
-                            record.markdown_size_bytes,
-                            record.status_code,
-                            record.content_type,
-                            record.crawled_at,
-                            record.processed_at or datetime.now(timezone.utc),
-                        )
-
-                        if result and result['inserted']:
-                            inserted += 1
-                        else:
-                            updated += 1
-
-                    except Exception as e:
-                        logger.error(f"Error saving record {record.url}: {e}")
-                        failed += 1
+                # executemany: 단일 트랜잭션 내에서 배치 실행 (라운드트립 최소화)
+                await conn.executemany(self.UPSERT_QUERY, args)
+                succeeded = len(records)
 
             # 통계 업데이트
             elapsed_ms = (time.time() - start_time) * 1000
-            self.stats.records_inserted += inserted
-            self.stats.records_updated += updated
+            self.stats.records_inserted += succeeded
             self.stats.records_failed += failed
             self.stats.batch_count += 1
             self.stats.total_insert_time_ms += elapsed_ms
 
             logger.debug(
-                f"Batch saved: inserted={inserted}, updated={updated}, "
+                f"Batch saved: {succeeded} records, "
                 f"failed={failed}, time={elapsed_ms:.1f}ms"
             )
 
@@ -337,7 +327,7 @@ class PostgresWriter:
             failed = len(records)
             self.stats.records_failed += failed
 
-        return inserted + updated, failed
+        return succeeded, failed
 
     async def flush(self) -> None:
         """버퍼 강제 플러시"""

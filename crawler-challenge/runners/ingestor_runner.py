@@ -35,7 +35,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.ingestor.httpx_crawler import HighSpeedIngestor
 from src.ingestor.kafka_producer import KafkaPageProducer
 from src.managers.tranco_manager import TrancoManager
-from config.kafka_config import get_config
+from src.common.kafka_config import get_config
 
 # 로깅 설정
 logging.basicConfig(

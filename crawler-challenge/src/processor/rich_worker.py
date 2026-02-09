@@ -14,10 +14,7 @@ from typing import Optional
 from urllib.parse import urljoin
 
 from .base_worker import BaseWorker, ProcessorType, ProcessedResult
-
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config
+from src.common.kafka_config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +35,14 @@ class RichWorker(BaseWorker):
     - JavaScript 렌더링
     - 동적 콘텐츠 추출
     - LLM 최적화 Markdown 생성
+
+    Trade-off (중복 크롤링):
+        Router가 전달한 HTML은 정적 크롤링 결과이므로,
+        동적 페이지(SPA 등)에서는 JS 실행 전의 빈 HTML만 포함될 수 있다.
+        이 경우 Crawl4AI가 URL을 재방문하여 브라우저로 렌더링하는 것이
+        불가피하다. 이는 의도된 설계로, Ingestor의 고속 정적 크롤링과
+        RichWorker의 저속 JS 렌더링을 분리함으로써 전체 파이프라인
+        처리량을 최적화한다.
     """
 
     def __init__(

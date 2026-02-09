@@ -432,7 +432,7 @@ class TestRoutedMessage:
 
         msg = RoutedMessage(
             url="https://example.com",
-            html="<html></html>",
+            html_compressed=b"compressed_data",
             score=85,
             route=RouteDecision.FAST,
             route_reason="High score",

@@ -17,10 +17,7 @@ from bs4 import BeautifulSoup
 import html2text
 
 from .base_worker import BaseWorker, ProcessorType, ProcessedResult
-
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config
+from src.common.kafka_config import get_config
 
 logger = logging.getLogger(__name__)
 

@@ -34,7 +34,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.processor.fast_worker import FastWorker, FastWorkerPool
 from src.processor.base_worker import ProcessedResult
-from config.kafka_config import get_config
+from src.common.kafka_config import get_config
 
 # 로깅 설정
 logging.basicConfig(

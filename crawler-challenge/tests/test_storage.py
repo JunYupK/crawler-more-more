@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from urllib.parse import urlparse
 
 import sys
+from pathlib import Path
 
 try:
     import pytest
@@ -41,7 +42,7 @@ except ImportError:
 
     pytest = DummyPytest()
 
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # 의존성 모듈 체크
 DEPS_AVAILABLE = True

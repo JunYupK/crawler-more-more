@@ -19,12 +19,9 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .compression import ZstdCompressor, CompressionStats
+from src.common.compression import ZstdCompressor, CompressionStats
+from src.common.kafka_config import get_config, IngestorConfig
 from .kafka_producer import KafkaPageProducer
-
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config, IngestorConfig
 
 logger = logging.getLogger(__name__)
 
