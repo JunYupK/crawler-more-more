@@ -88,10 +88,17 @@ class IngestorRunner:
 
         # Tranco 리스트 로드
         tranco_manager = TrancoManager()
-        urls = tranco_manager.get_urls(limit=limit, start_rank=start_rank)
+        url_dataset = await tranco_manager.prepare_url_dataset(initial_count=limit or 1000000)
+
+        if not url_dataset:
+            logger.error("Failed to load Tranco list")
+            return
+
+        # start_rank 적용 및 URL 문자열 추출
+        urls = [item['url'] for item in url_dataset if item['rank'] >= start_rank]
 
         if not urls:
-            logger.error("Failed to load Tranco list")
+            logger.error("No URLs after applying start_rank filter")
             return
 
         logger.info(f"Loaded {len(urls):,} URLs from Tranco list")

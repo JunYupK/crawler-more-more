@@ -1,50 +1,33 @@
 # Stream Pipeline Infrastructure
-# Kafka + Zookeeper + MinIO + PostgreSQL + Monitoring
-# Usage: docker compose -f docker/docker-compose.stream.yml up -d
+# Kafka (KRaft mode) + MinIO + PostgreSQL + Redis
+# Usage: docker compose up -d
 
 version: '3.8'
 
 services:
   # ============================================
-  # Message Queue: Kafka + Zookeeper
+  # Message Queue: Kafka (KRaft Mode - No Zookeeper)
   # ============================================
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
-    container_name: zookeeper
-    hostname: zookeeper
-    ports:
-      - "2181:2181"
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    volumes:
-      - zookeeper_data:/var/lib/zookeeper/data
-      - zookeeper_log:/var/lib/zookeeper/log
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "2181"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - stream-network
-
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
     hostname: kafka
-    depends_on:
-      zookeeper:
-        condition: service_healthy
     ports:
       - "9092:9092"      # External access
       - "29092:29092"    # Internal access
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      # KRaft Mode Settings
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Listeners
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://${KAFKA_EXTERNAL_HOST:-localhost}:9092
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,PLAINTEXT://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Cluster ID (required for KRaft)
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
       # Performance Tuning
       KAFKA_NUM_PARTITIONS: 12
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
@@ -57,6 +40,8 @@ services:
       KAFKA_LOG_CLEANUP_POLICY: delete
       # Memory
       KAFKA_HEAP_OPTS: "-Xmx2G -Xms1G"
+      # KRaft log dirs
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -79,7 +64,6 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: crawler-stream
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
       DYNAMIC_CONFIG_ENABLED: "true"
       AUTH_TYPE: "LOGIN_FORM"
       SPRING_SECURITY_USER_NAME: ${KAFKA_UI_USER:-admin}
@@ -145,7 +129,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-crawler_stream}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-stream.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../docker/init-stream.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crawler} -d ${POSTGRES_DB:-crawler_stream}"]
       interval: 5s
@@ -155,7 +139,7 @@ services:
       - stream-network
 
   # ============================================
-  # Monitoring: Redis (Progress Tracking)
+  # Cache: Redis (Progress Tracking)
   # ============================================
   redis:
     image: redis:7-alpine
@@ -174,50 +158,10 @@ services:
     networks:
       - stream-network
 
-  # ============================================
-  # Monitoring: Prometheus
-  # ============================================
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus-stream.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.enable-lifecycle'
-    networks:
-      - stream-network
-
-  # ============================================
-  # Monitoring: Grafana
-  # ============================================
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
-    networks:
-      - stream-network
-
 # ============================================
 # Volumes
 # ============================================
 volumes:
-  zookeeper_data:
-    driver: local
-  zookeeper_log:
-    driver: local
   kafka_data:
     driver: local
   minio_data:
@@ -225,10 +169,6 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
     driver: local
 
 # ============================================
