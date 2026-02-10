@@ -114,7 +114,9 @@ class ZstdCompressor:
 
         from io import BytesIO
         output = BytesIO()
-        with self._compressor.stream_writer(output) as writer:
+        with self._compressor.stream_writer(
+            output, closefd=False, size=len(data)
+        ) as writer:
             for i in range(0, len(data), chunk_size):
                 writer.write(data[i:i + chunk_size])
 
