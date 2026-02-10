@@ -99,7 +99,7 @@ class KafkaPageProducer:
                 key_serializer=lambda k: k.encode('utf-8') if k else None,
                 # 배치 설정
                 linger_ms=self.producer_config.linger_ms,
-                batch_size=self.producer_config.batch_size,
+                max_batch_size=self.producer_config.batch_size,  # aiokafka uses max_batch_size
                 # 압축
                 compression_type=self.producer_config.compression_type,
                 # 신뢰성
@@ -108,7 +108,6 @@ class KafkaPageProducer:
                 # 타임아웃
                 request_timeout_ms=self.producer_config.request_timeout_ms,
                 # 메모리
-                max_batch_size=1048576,  # 1MB
                 max_request_size=10485760,  # 10MB
             )
 
