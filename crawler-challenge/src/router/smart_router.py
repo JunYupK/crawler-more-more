@@ -159,7 +159,7 @@ class SmartRouter:
                 value_serializer=lambda v: msgpack.packb(v, use_bin_type=True),
                 compression_type='lz4',
                 linger_ms=20,
-                batch_size=32768,
+                max_batch_size=32768,  # aiokafka uses max_batch_size
             )
 
             await self._consumer.start()

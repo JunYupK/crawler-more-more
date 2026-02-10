@@ -102,9 +102,8 @@ class KafkaPageProducer:
                 max_batch_size=self.producer_config.batch_size,  # aiokafka uses max_batch_size
                 # 압축
                 compression_type=self.producer_config.compression_type,
-                # 신뢰성
+                # 신뢰성 (aiokafka handles retries internally)
                 acks=self.producer_config.acks,
-                retries=self.producer_config.retries,
                 # 타임아웃
                 request_timeout_ms=self.producer_config.request_timeout_ms,
                 # 메모리
