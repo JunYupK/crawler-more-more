@@ -14,10 +14,7 @@ from typing import Optional
 from urllib.parse import urljoin
 
 from .base_worker import BaseWorker, ProcessorType, ProcessedResult
-
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config
+from src.common.kafka_config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +35,14 @@ class RichWorker(BaseWorker):
     - JavaScript 렌더링
     - 동적 콘텐츠 추출
     - LLM 최적화 Markdown 생성
+
+    Trade-off (중복 크롤링):
+        Router가 전달한 HTML은 정적 크롤링 결과이므로,
+        동적 페이지(SPA 등)에서는 JS 실행 전의 빈 HTML만 포함될 수 있다.
+        이 경우 Crawl4AI가 URL을 재방문하여 브라우저로 렌더링하는 것이
+        불가피하다. 이는 의도된 설계로, Ingestor의 고속 정적 크롤링과
+        RichWorker의 저속 JS 렌더링을 분리함으로써 전체 파이프라인
+        처리량을 최적화한다.
     """
 
     def __init__(
@@ -144,7 +149,7 @@ class RichWorker(BaseWorker):
                 )
 
             # 결과 추출
-            markdown = result.markdown or ""
+            markdown = str(result.markdown or "")
             plain_text = result.cleaned_html or ""
 
             # 메타데이터
@@ -152,15 +157,32 @@ class RichWorker(BaseWorker):
             title = extracted_metadata.get('title')
             description = extracted_metadata.get('description')
 
-            # 링크 추출
+            # 링크 추출 (Crawl4AI 0.8+: links는 {'internal': [...], 'external': [...]} dict)
             links = []
             if hasattr(result, 'links') and result.links:
-                links = [link.get('href', '') for link in result.links if link.get('href')][:100]
+                raw_links = result.links
+                if isinstance(raw_links, dict):
+                    all_links = raw_links.get('internal', []) + raw_links.get('external', [])
+                    for link in all_links:
+                        href = link.get('href', '') if isinstance(link, dict) else str(link)
+                        if href:
+                            links.append(href)
+                elif isinstance(raw_links, list):
+                    for link in raw_links:
+                        href = link.get('href', '') if isinstance(link, dict) else str(link)
+                        if href:
+                            links.append(href)
+                links = links[:100]
 
-            # 이미지 추출
+            # 이미지 추출 (Crawl4AI 0.8+: media['images'] 사용)
             images = []
-            if hasattr(result, 'images') and result.images:
-                images = [img.get('src', '') for img in result.images if img.get('src')][:50]
+            media = getattr(result, 'media', None)
+            if isinstance(media, dict) and media.get('images'):
+                for img in media['images']:
+                    src = img.get('src', '') if isinstance(img, dict) else str(img)
+                    if src:
+                        images.append(src)
+                images = images[:50]
 
             return ProcessedResult(
                 url=url,

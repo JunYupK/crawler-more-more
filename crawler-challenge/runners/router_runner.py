@@ -39,7 +39,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.router.smart_router import SmartRouter, RoutedMessage
 from src.router.page_analyzer import PageAnalyzer
 from src.router.scoring import RouteDecision
-from config.kafka_config import get_config
+from src.common.kafka_config import get_config
 
 # 로깅 설정
 logging.basicConfig(

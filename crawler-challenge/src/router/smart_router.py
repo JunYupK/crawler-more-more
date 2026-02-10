@@ -22,13 +22,10 @@ import msgpack
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.errors import KafkaError
 
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-
-from src.ingestor.compression import decompress_to_str
+from src.common.compression import decompress_to_str, compress
+from src.common.kafka_config import get_config, TopicConfig, ConsumerConfig
 from src.router.page_analyzer import PageAnalyzer, AnalysisResult, AnalyzerStats
 from src.router.scoring import RouteDecision
-from config.kafka_config import get_config, TopicConfig, ConsumerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +73,7 @@ class RouterStats:
 class RoutedMessage:
     """라우팅된 메시지"""
     url: str
-    html: str                    # 압축 해제된 HTML
+    html_compressed: bytes       # 압축 유지된 HTML (Zstd)
     score: int                   # 정적 점수
     route: RouteDecision         # 라우팅 결정
     route_reason: str            # 라우팅 이유
@@ -218,6 +215,10 @@ class SmartRouter:
 
         logger.info("Starting routing loop...")
         processed = 0
+        uncommitted = 0
+        last_commit_time = time.time()
+        COMMIT_INTERVAL_SEC = 5.0
+        COMMIT_BATCH_SIZE = 100
 
         try:
             async for message in self._consumer:
@@ -238,11 +239,17 @@ class SmartRouter:
                         if callback:
                             callback(routed)
 
-                    # 오프셋 커밋
-                    await self._consumer.commit()
+                    uncommitted += 1
+
+                    # 배치 단위 오프셋 커밋 (100건 또는 5초 주기)
+                    now = time.time()
+                    if uncommitted >= COMMIT_BATCH_SIZE or (now - last_commit_time) >= COMMIT_INTERVAL_SEC:
+                        await self._consumer.commit()
+                        uncommitted = 0
+                        last_commit_time = now
 
                     # 처리 시간 기록
-                    processing_time = (time.time() - start_time) * 1000
+                    processing_time = (now - start_time) * 1000
                     self.stats.total_processing_time_ms += processing_time
 
                     processed += 1
@@ -265,6 +272,12 @@ class SmartRouter:
         except Exception as e:
             logger.error(f"Error in router loop: {e}", exc_info=True)
         finally:
+            # 남은 오프셋 커밋
+            if uncommitted > 0 and self._consumer:
+                try:
+                    await self._consumer.commit()
+                except Exception:
+                    pass
             logger.info(f"Routing loop ended. Processed: {processed}")
 
     async def _process_message(self, message: dict) -> Optional[RoutedMessage]:
@@ -281,16 +294,20 @@ class SmartRouter:
 
         try:
             url = message.get('url', '')
-            html_compressed = message.get('html_compressed', b'')
+            html_compressed_raw = message.get('html_compressed', b'')
             original_timestamp = message.get('timestamp', 0)
             original_metadata = message.get('metadata', {})
 
-            # HTML 압축 해제
-            if isinstance(html_compressed, bytes):
-                html = decompress_to_str(html_compressed)
+            # HTML 압축 해제 (분석용)
+            if isinstance(html_compressed_raw, bytes) and html_compressed_raw:
+                html = decompress_to_str(html_compressed_raw)
+                html_compressed = html_compressed_raw  # 원본 압축 데이터 유지
+            elif isinstance(html_compressed_raw, str):
+                html = html_compressed_raw
+                html_compressed = compress(html_compressed_raw.encode('utf-8'))
             else:
-                # 이미 문자열인 경우
-                html = html_compressed
+                logger.warning(f"Empty HTML for {url}")
+                return None
 
             if not html:
                 logger.warning(f"Empty HTML for {url}")
@@ -312,7 +329,7 @@ class SmartRouter:
 
             return RoutedMessage(
                 url=url,
-                html=html,
+                html_compressed=html_compressed,
                 score=analysis.score,
                 route=route,
                 route_reason=route_reason,
@@ -342,10 +359,10 @@ class SmartRouter:
         else:
             target_topic = self.topics.process_rich
 
-        # 메시지 구성
+        # 메시지 구성 (압축 상태 유지하여 대역폭 절약)
         message = {
             'url': routed.url,
-            'html': routed.html,  # 압축 해제된 HTML
+            'html_compressed': routed.html_compressed,
             'score': routed.score,
             'route': routed.route.value,
             'route_reason': routed.route_reason,
@@ -388,7 +405,7 @@ class SmartRouter:
 
         return RoutedMessage(
             url=url,
-            html=html,
+            html_compressed=compress(html.encode('utf-8')),
             score=analysis.score,
             route=analysis.route,
             route_reason=route_reason,

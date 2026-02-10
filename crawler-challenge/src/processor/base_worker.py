@@ -20,9 +20,8 @@ import msgpack
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.errors import KafkaError
 
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config, TopicConfig
+from src.common.kafka_config import get_config, TopicConfig
+from src.common.compression import decompress_to_str
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +299,10 @@ class BaseWorker(ABC):
 
         logger.info(f"Starting processing loop (worker_id={self.worker_id})...")
         processed = 0
+        uncommitted = 0
+        last_commit_time = time.time()
+        COMMIT_INTERVAL_SEC = 5.0
+        COMMIT_BATCH_SIZE = 100
 
         try:
             async for message in self._consumer:
@@ -318,8 +321,14 @@ class BaseWorker(ABC):
                         if callback:
                             callback(result)
 
-                    # 오프셋 커밋
-                    await self._consumer.commit()
+                    uncommitted += 1
+
+                    # 배치 단위 오프셋 커밋 (100건 또는 5초 주기)
+                    now = time.time()
+                    if uncommitted >= COMMIT_BATCH_SIZE or (now - last_commit_time) >= COMMIT_INTERVAL_SEC:
+                        await self._consumer.commit()
+                        uncommitted = 0
+                        last_commit_time = now
 
                     processed += 1
 
@@ -341,6 +350,12 @@ class BaseWorker(ABC):
         except Exception as e:
             logger.error(f"Error in worker loop: {e}", exc_info=True)
         finally:
+            # 남은 오프셋 커밋
+            if uncommitted > 0 and self._consumer:
+                try:
+                    await self._consumer.commit()
+                except Exception:
+                    pass
             logger.info(f"Processing loop ended. Processed: {processed}")
 
     async def _process_message(self, message: dict) -> Optional[ProcessedResult]:
@@ -349,12 +364,21 @@ class BaseWorker(ABC):
 
         try:
             url = message.get('url', '')
-            html = message.get('html', '')
+            html_compressed = message.get('html_compressed', b'')
             score = message.get('score', 0)
             original_timestamp = message.get('original_timestamp', 0)
             router_timestamp = message.get('router_timestamp', 0)
             metadata = message.get('metadata', {})
             analysis = message.get('analysis', {})
+
+            # HTML 압축 해제
+            if isinstance(html_compressed, bytes) and html_compressed:
+                html = decompress_to_str(html_compressed)
+            elif isinstance(html_compressed, str):
+                html = html_compressed
+            else:
+                # 하위 호환성: 이전 'html' 필드도 지원
+                html = message.get('html', '')
 
             if not html:
                 logger.warning(f"Empty HTML for {url}")

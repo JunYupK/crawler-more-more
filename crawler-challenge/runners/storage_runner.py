@@ -38,7 +38,7 @@ from src.storage.hybrid_storage import (
     StorageResult,
     test_storage_connections,
 )
-from config.kafka_config import get_config
+from src.common.kafka_config import get_config
 
 # 로깅 설정
 logging.basicConfig(

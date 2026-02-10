@@ -20,10 +20,8 @@ from io import BytesIO
 from minio import Minio
 from minio.error import S3Error
 
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config, MinIOConfig
-from src.ingestor.compression import ZstdCompressor
+from src.common.kafka_config import get_config, MinIOConfig
+from src.common.compression import ZstdCompressor
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +158,7 @@ class MinIOWriter:
 
         try:
             # 동기 호출을 비동기로 래핑
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             exists = await loop.run_in_executor(
                 None, self._client.bucket_exists, bucket
             )
@@ -294,7 +292,7 @@ class MinIOWriter:
                         minio_metadata[f"x-amz-meta-{k}"] = v
 
             # 업로드 (동기 → 비동기)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None,
                 lambda: self._client.put_object(
@@ -381,7 +379,7 @@ class MinIOWriter:
         try:
             key = self._url_to_key(url, extension)
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self._client.get_object(bucket, key)
@@ -422,7 +420,7 @@ class MinIOWriter:
         try:
             key = self._url_to_key(url, extension)
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
                 lambda: self._client.remove_object(bucket, key)
@@ -450,7 +448,7 @@ class MinIOWriter:
         try:
             key = self._url_to_key(url, extension)
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
                 lambda: self._client.stat_object(bucket, key)

@@ -19,9 +19,7 @@ import msgpack
 from aiokafka import AIOKafkaProducer
 from aiokafka.errors import KafkaError, KafkaConnectionError
 
-import sys
-sys.path.insert(0, '/home/user/crawler-more-more/crawler-challenge')
-from config.kafka_config import get_config, KafkaConfig, ProducerConfig, TopicConfig
+from src.common.kafka_config import get_config, KafkaConfig, ProducerConfig, TopicConfig
 
 logger = logging.getLogger(__name__)
 
@@ -277,9 +275,10 @@ class KafkaPageProducer:
                 key=key,
             )
 
-            # 통계 업데이트
+            # 통계 업데이트 (serialize once, reuse for size)
+            serialized = self._serialize(value)
             self.stats.messages_sent += 1
-            self.stats.bytes_sent += len(self._serialize(value))
+            self.stats.bytes_sent += len(serialized)
 
             logger.debug(
                 f"Sent to {topic}: partition={future.partition}, "
