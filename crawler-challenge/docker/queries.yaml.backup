@@ -1,0 +1,93 @@
+# postgres_exporter Custom Queries
+# Prometheus에서 SQL 쿼리 결과를 메트릭으로 수집
+
+pg_crawler_stats:
+  query: |
+    SELECT
+      COUNT(*) as total_pages,
+      COUNT(CASE WHEN created_at > NOW() - INTERVAL '1 minute' THEN 1 END) as pages_last_1min,
+      COUNT(CASE WHEN created_at > NOW() - INTERVAL '5 minutes' THEN 1 END) as pages_last_5min,
+      COUNT(CASE WHEN created_at > NOW() - INTERVAL '1 hour' THEN 1 END) as pages_last_1hour,
+      COUNT(DISTINCT domain) as unique_domains,
+      COALESCE(AVG(LENGTH(content_text)), 0)::bigint as avg_content_length
+    FROM crawled_pages
+  metrics:
+    - total_pages:
+        usage: "GAUGE"
+        description: "Total number of crawled pages"
+    - pages_last_1min:
+        usage: "GAUGE"
+        description: "Pages crawled in the last 1 minute"
+    - pages_last_5min:
+        usage: "GAUGE"
+        description: "Pages crawled in the last 5 minutes"
+    - pages_last_1hour:
+        usage: "GAUGE"
+        description: "Pages crawled in the last 1 hour"
+    - unique_domains:
+        usage: "GAUGE"
+        description: "Number of unique domains crawled"
+    - avg_content_length:
+        usage: "GAUGE"
+        description: "Average content length in bytes"
+
+pg_crawler_dlq:
+  query: |
+    SELECT
+      COALESCE((SELECT COUNT(*) FROM crawler_dlq), 0) as dlq_total,
+      COALESCE((SELECT COUNT(*) FROM crawler_dlq WHERE created_at > NOW() - INTERVAL '1 hour'), 0) as dlq_last_1hour,
+      COALESCE((SELECT COUNT(*) FROM crawler_dlq WHERE error_type = 'DataError'), 0) as dlq_data_errors,
+      COALESCE((SELECT COUNT(*) FROM crawler_dlq WHERE error_type = 'UniqueViolationError'), 0) as dlq_unique_errors
+    WHERE EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'crawler_dlq')
+    UNION ALL
+    SELECT 0, 0, 0, 0
+    WHERE NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'crawler_dlq')
+  metrics:
+    - dlq_total:
+        usage: "GAUGE"
+        description: "Total records in Dead Letter Queue"
+    - dlq_last_1hour:
+        usage: "GAUGE"
+        description: "DLQ records in the last 1 hour"
+    - dlq_data_errors:
+        usage: "GAUGE"
+        description: "DLQ records with DataError"
+    - dlq_unique_errors:
+        usage: "GAUGE"
+        description: "DLQ records with UniqueViolationError"
+
+pg_crawler_throughput:
+  query: |
+    SELECT
+      COALESCE(
+        (SELECT COUNT(*) FROM crawled_pages WHERE created_at > NOW() - INTERVAL '1 minute'), 0
+      )::float / 60 as pages_per_second
+  metrics:
+    - pages_per_second:
+        usage: "GAUGE"
+        description: "Current crawling throughput (pages/second)"
+
+pg_domain_stats:
+  query: |
+    SELECT
+      'total' as metric_type,
+      COUNT(DISTINCT domain)::bigint as domain_count
+    FROM crawled_pages
+    UNION ALL
+    SELECT
+      'top_10_total' as metric_type,
+      SUM(page_count)::bigint as domain_count
+    FROM (
+      SELECT COUNT(*) as page_count
+      FROM crawled_pages
+      GROUP BY domain
+      ORDER BY page_count DESC
+      LIMIT 10
+    ) top_domains
+  metrics:
+    - metric_type:
+        usage: "LABEL"
+        description: "Type of domain metric"
+    - domain_count:
+        usage: "GAUGE"
+        description: "Domain count metric"

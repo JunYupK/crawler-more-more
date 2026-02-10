@@ -6,4 +6,3 @@ aiokafka>=0.10.0
 msgpack>=1.0.7
 python-dotenv>=1.0.0
 tranco
-lz4>=4.3.0  # Kafka lz4 compression

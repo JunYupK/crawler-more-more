@@ -74,9 +74,9 @@ class ProducerConfig:
         default_factory=lambda: int(os.getenv("KAFKA_PRODUCER_BATCH_SIZE", "65536"))
     )
 
-    # Compression
+    # Compression (gzip is built-in, lz4/snappy require external libs)
     compression_type: str = field(
-        default_factory=lambda: os.getenv("KAFKA_PRODUCER_COMPRESSION", "lz4")
+        default_factory=lambda: os.getenv("KAFKA_PRODUCER_COMPRESSION", "gzip")
     )
 
     # Reliability

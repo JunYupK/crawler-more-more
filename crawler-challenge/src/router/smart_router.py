@@ -157,7 +157,7 @@ class SmartRouter:
             self._producer = AIOKafkaProducer(
                 bootstrap_servers=self.bootstrap_servers,
                 value_serializer=lambda v: msgpack.packb(v, use_bin_type=True),
-                compression_type='lz4',
+                compression_type='gzip',  # gzip is built-in, no external lib needed
                 linger_ms=20,
                 max_batch_size=32768,  # aiokafka uses max_batch_size
             )

@@ -12,7 +12,6 @@ mac = [
     "msgpack>=1.0.7",
     "python-dotenv>=1.0.0",
     "tranco",
-    "lz4>=4.3.0",  # Kafka lz4 compression
 ]
 desktop = [
     "aiokafka>=0.10.0",
@@ -25,7 +24,6 @@ desktop = [
     "zstandard>=0.22.0",
     "python-dotenv>=1.0.0",
     "prometheus-client>=0.20.0",
-    "lz4>=4.3.0",  # Kafka lz4 compression
 ]
 dev = [
     "pytest>=7.4.0",
