@@ -149,7 +149,7 @@ class RichWorker(BaseWorker):
                 )
 
             # 결과 추출
-            markdown = result.markdown or ""
+            markdown = str(result.markdown or "")
             plain_text = result.cleaned_html or ""
 
             # 메타데이터
@@ -157,15 +157,32 @@ class RichWorker(BaseWorker):
             title = extracted_metadata.get('title')
             description = extracted_metadata.get('description')
 
-            # 링크 추출
+            # 링크 추출 (Crawl4AI 0.8+: links는 {'internal': [...], 'external': [...]} dict)
             links = []
             if hasattr(result, 'links') and result.links:
-                links = [link.get('href', '') for link in result.links if link.get('href')][:100]
+                raw_links = result.links
+                if isinstance(raw_links, dict):
+                    all_links = raw_links.get('internal', []) + raw_links.get('external', [])
+                    for link in all_links:
+                        href = link.get('href', '') if isinstance(link, dict) else str(link)
+                        if href:
+                            links.append(href)
+                elif isinstance(raw_links, list):
+                    for link in raw_links:
+                        href = link.get('href', '') if isinstance(link, dict) else str(link)
+                        if href:
+                            links.append(href)
+                links = links[:100]
 
-            # 이미지 추출
+            # 이미지 추출 (Crawl4AI 0.8+: media['images'] 사용)
             images = []
-            if hasattr(result, 'images') and result.images:
-                images = [img.get('src', '') for img in result.images if img.get('src')][:50]
+            media = getattr(result, 'media', None)
+            if isinstance(media, dict) and media.get('images'):
+                for img in media['images']:
+                    src = img.get('src', '') if isinstance(img, dict) else str(img)
+                    if src:
+                        images.append(src)
+                images = images[:50]
 
             return ProcessedResult(
                 url=url,
