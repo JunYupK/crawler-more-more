@@ -276,6 +276,7 @@ class URLQueueConsumer:
         shard_id = self._queue_manager.get_shard_for_url(url)
         client = self._queue_manager.redis_clients[shard_id]
         queue_key = self._queue_manager.queue_templates['priority_low'].format(shard=shard_id)
+        pending_key = self._queue_manager.pending_hashes_template.format(shard=shard_id)
 
         url_data = json.dumps({
             'url': url,
@@ -285,6 +286,7 @@ class URLQueueConsumer:
             'source_url': source_url,
         })
         client.zadd(queue_key, {url_data: self.DISCOVERED_PRIORITY})
+        client.sadd(pending_key, url_hash)
 
         # 5. 도메인 카운터 증가
         domain_client.hincrby(self.DOMAIN_COUNT_KEY, domain, 1)
