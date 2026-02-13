@@ -23,10 +23,8 @@ import os
 import time
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING, Any
 
-import asyncpg
 import msgpack
 from aiokafka import AIOKafkaConsumer
 from aiokafka.errors import KafkaError
@@ -34,45 +32,12 @@ from aiokafka.errors import KafkaError
 from src.common.kafka_config import get_config
 from src.embedding.chunker import MarkdownChunker, Chunk
 from src.embedding.embedder import BaseEmbedder, create_embedder
+from src.embedding.stats import EmbeddingStats
+
+if TYPE_CHECKING:
+    import asyncpg
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class EmbeddingStats:
-    """임베딩 워커 통계"""
-    messages_consumed: int = 0
-    messages_skipped: int = 0
-    messages_failed: int = 0
-    chunks_created: int = 0
-    chunks_stored: int = 0
-    embed_time_ms: float = 0.0
-    store_time_ms: float = 0.0
-    start_time: float = field(default_factory=time.time)
-
-    @property
-    def messages_processed(self) -> int:
-        return self.messages_consumed - self.messages_skipped - self.messages_failed
-
-    @property
-    def elapsed_sec(self) -> float:
-        return time.time() - self.start_time
-
-    @property
-    def mps(self) -> float:
-        return self.messages_consumed / self.elapsed_sec if self.elapsed_sec > 0 else 0.0
-
-    def __str__(self) -> str:
-        return (
-            f"EmbeddingStats("
-            f"consumed={self.messages_consumed:,}, "
-            f"processed={self.messages_processed:,}, "
-            f"skipped={self.messages_skipped:,}, "
-            f"failed={self.messages_failed:,}, "
-            f"chunks={self.chunks_stored:,}, "
-            f"mps={self.mps:.1f})"
-        )
-
 
 # PostgreSQL UPSERT 쿼리
 UPSERT_CHUNKS_QUERY = """
@@ -138,7 +103,7 @@ class EmbeddingWorker:
 
         # Kafka/DB 클라이언트
         self._consumer: Optional[AIOKafkaConsumer] = None
-        self._pg_pool: Optional[asyncpg.Pool] = None
+        self._pg_pool: Optional[Any] = None
         self._running = False
 
         self.stats = EmbeddingStats()
@@ -164,6 +129,8 @@ class EmbeddingWorker:
 
         # PostgreSQL 연결 풀
         logger.info("Connecting to PostgreSQL...")
+        import asyncpg
+
         self._pg_pool = await asyncpg.create_pool(
             dsn=self.pg_dsn,
             min_size=2,
