@@ -4,12 +4,27 @@
 
 ## 📋 목차
 
+- [현재 저장소 기준 배포 게이트 정책 (중요)](#-현재-저장소-기준-배포-게이트-정책-중요)
+
 - [Pipeline 개요](#pipeline-개요)
 - [Workflows 설명](#workflows-설명)
 - [환경 설정](#환경-설정)
 - [사용 방법](#사용-방법)
 - [트러블슈팅](#트러블슈팅)
 - [Best Practices](#best-practices)
+
+---
+
+## 🔔 현재 저장소 기준 배포 게이트 정책 (중요)
+
+실제 운영 중인 `.github/workflows/deploy.yml`은 아래 규칙으로 동작합니다.
+
+- `push` to `master`: **배포 전 테스트 검증만 수행**
+- `workflow_dispatch`: `deploy_mode` 입력값을 받음 (`check` / `accept`)
+  - `check`: 테스트만 수행하고 배포는 스킵
+  - `accept`: 테스트 성공 시에만 self-hosted 러너에서 Docker Compose 배포 실행
+
+즉, CD는 **수동 승인(accept 모드)** 이 있어야만 진행됩니다.
 
 ---
 
