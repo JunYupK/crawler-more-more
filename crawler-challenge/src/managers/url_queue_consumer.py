@@ -74,6 +74,8 @@ class URLQueueConsumer:
             'urls_received': 0,
             'urls_added': 0,
             'urls_skipped_dedup': 0,
+            'urls_skipped_dedup_completed': 0,
+            'urls_skipped_dedup_pending': 0,
             'urls_skipped_domain_limit': 0,
             'urls_skipped_queue_limit': 0,
             'urls_skipped_invalid': 0,
@@ -224,8 +226,12 @@ class URLQueueConsumer:
             # stats 업데이트는 async 컨텍스트에서만 수행 (race condition 방지)
             if result == 'added':
                 self._stats['urls_added'] += 1
-            elif result == 'dedup':
+            elif result == 'dedup_completed':
                 self._stats['urls_skipped_dedup'] += 1
+                self._stats['urls_skipped_dedup_completed'] += 1
+            elif result == 'dedup_pending':
+                self._stats['urls_skipped_dedup'] += 1
+                self._stats['urls_skipped_dedup_pending'] += 1
             elif result == 'domain_limit':
                 self._stats['urls_skipped_domain_limit'] += 1
 
@@ -235,13 +241,15 @@ class URLQueueConsumer:
 
         처리 순서:
           1. completed set 중복 체크 (모든 샤드)
-          2. 도메인별 URL 수 상한 체크
-          3. priority_low 큐에 추가
-          4. 도메인 카운터 증가
+          2. pending 상태 중복 체크 (모든 샤드 큐/processing/retry)
+          3. 도메인별 URL 수 상한 체크
+          4. priority_low 큐에 추가
+          5. 도메인 카운터 증가
 
         Returns:
             'added'        : 큐에 추가 성공
-            'dedup'        : 이미 완료된 URL (중복)
+            'dedup_completed': 이미 완료된 URL (중복)
+            'dedup_pending'  : 이미 pending 상태의 URL (중복)
             'domain_limit' : 도메인 상한 초과
         """
         url_hash = self._queue_manager._get_url_hash(url)
@@ -252,15 +260,19 @@ class URLQueueConsumer:
             client = self._queue_manager.redis_clients[shard_id]
             completed_key = self._queue_manager.completed_template.format(shard=shard_id)
             if client.sismember(completed_key, url_hash):
-                return 'dedup'
+                return 'dedup_completed'
 
-        # 2. 도메인별 상한 체크 (샤드 0의 Redis에 카운터 저장)
+        # 2. 중복 체크: pending 상태(큐/processing/retry) 확인
+        if self._queue_manager.is_url_hash_pending(url_hash):
+            return 'dedup_pending'
+
+        # 3. 도메인별 상한 체크 (샤드 0의 Redis에 카운터 저장)
         domain_client = self._queue_manager.redis_clients[0]
         domain_count = int(domain_client.hget(self.DOMAIN_COUNT_KEY, domain) or 0)
         if domain_count >= self.MAX_DOMAIN_URLS:
             return 'domain_limit'
 
-        # 3. priority_low 큐에 추가
+        # 4. priority_low 큐에 추가
         shard_id = self._queue_manager.get_shard_for_url(url)
         client = self._queue_manager.redis_clients[shard_id]
         queue_key = self._queue_manager.queue_templates['priority_low'].format(shard=shard_id)
@@ -274,7 +286,7 @@ class URLQueueConsumer:
         })
         client.zadd(queue_key, {url_data: self.DISCOVERED_PRIORITY})
 
-        # 4. 도메인 카운터 증가
+        # 5. 도메인 카운터 증가
         domain_client.hincrby(self.DOMAIN_COUNT_KEY, domain, 1)
 
         logger.debug(f"Added discovered URL: {url} (domain_count={domain_count + 1})")
