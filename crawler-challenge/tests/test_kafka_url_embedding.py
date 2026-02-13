@@ -55,7 +55,7 @@ def test_create_embedder_falls_back_to_local_for_unknown_backend(monkeypatch):
 
 def test_embedding_stats_processed_count_excludes_skipped_and_failed():
     """임베딩 처리 수 계산이 consumed/skipped/failed 관계를 유지하는지 확인."""
-    from src.embedding.embedding_worker import EmbeddingStats
+    from src.embedding.stats import EmbeddingStats
 
     stats = EmbeddingStats(messages_consumed=20, messages_skipped=3, messages_failed=2)
 
