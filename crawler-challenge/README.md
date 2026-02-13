@@ -1,42 +1,36 @@
 # Crawler Stream Pipeline
 
-고처리량 웹 크롤링 스트림 파이프라인. Mac(크롤링) + Desktop(처리/저장) 분산 아키텍처.
+고처리량 웹 크롤링 스트림 파이프라인. Mac(크롤링) + Desktop(처리/저장/임베딩) 분산 아키텍처.
 
 ## Architecture
 
 ```
-Mac (Layer 1)                          Desktop (Layer 2-4)
-┌──────────────┐                       ┌──────────────────────────────────────┐
-│   Ingestor   │                       │  Router → Processor → Storage       │
-│  HTTP Crawl  │──── Kafka ──────────> │                                      │
-│  + Zstd 압축  │   (raw.page)         │  ┌─ process.fast → FastProcessor    │
-└──────────────┘                       │  │    (BeautifulSoup)                │
-                                       │  └─ process.rich → RichProcessor    │
-                                       │       (Crawl4AI)                     │
-                                       │          ↓                           │
-                                       │  processed.final → HybridStorage    │
-                                       │    (MinIO + PostgreSQL)              │
-                                       └──────────────────────────────────────┘
+Mac (Layer 1)                    Desktop (Layer 2~6)
+┌──────────────┐                 ┌────────────────────────────────────────────┐
+│   Ingestor   │                 │  ┌──────────────────────────────────────┐  │
+│  HTTP Crawl  │──── Kafka ─────►│  │           Kafka Stream Pipeline      │  │
+│  Zstd 압축   │   (raw.page)    │  │                                      │  │
+│  500 동시요청 │                 │  │  Router                              │  │
+└──────────────┘                 │  │    ├─ process.fast → FastProcessor   │  │
+                                 │  │    │    (BeautifulSoup)               │  │
+                                 │  │    └─ process.rich → RichProcessor   │  │
+                                 │  │         (Crawl4AI)                   │  │
+                                 │  │              ↓                       │  │
+                                 │  │       processed.final                │  │
+                                 │  │         ├─ Storage  (MinIO + PG)     │  │
+                                 │  │         ├─ Embedding (pgvector RAG)  │  │
+                                 │  │         └─ URL Queue ──► Redis 큐    │  │
+                                 │  │              ↑ 피드백 루프            │  │
+                                 │  └──────────────────────────────────────┘  │
+                                 └────────────────────────────────────────────┘
 ```
 
-## Project Structure
+### URL 자동 재공급 (피드백 루프)
 
-```
-crawler-challenge/
-├── src/
-│   ├── common/          # 공유 모듈 (compression, kafka_config)
-│   ├── ingestor/        # Layer 1: HTTP 크롤링 + Kafka produce
-│   ├── router/          # Layer 2: 콘텐츠 분석 + 라우팅
-│   ├── processor/       # Layer 3: HTML → Markdown 변환
-│   └── storage/         # Layer 4: MinIO + PostgreSQL 저장
-├── runners/             # 전체 실행 스크립트 (entry points)
-├── mac/                 # Mac 전용 간소화 실행기
-├── desktop/             # Desktop 전용 간소화 실행기
-├── config/              # 설정 (하위호환 shim)
-├── docker/              # Docker, SQL, Prometheus 설정
-├── tests/               # 테스트 (pytest)
-└── pyproject.toml       # 패키지 설정
-```
+Fast/Rich Processor가 페이지 처리 중 발견한 링크를 `discovered.urls` 토픽으로 전송하고,
+URL Queue Consumer가 이를 소비하여 Redis 크롤러 큐의 `priority_low`에 자동 적재합니다.
+
+---
 
 ## Quick Start
 
@@ -53,7 +47,7 @@ cd crawler-challenge
 # Mac (Ingestor만 실행)
 pip install -e ".[mac]"
 
-# Desktop (Router/Processor/Storage 실행)
+# Desktop (Router/Processor/Storage/Embedding 실행)
 pip install -e ".[desktop]"
 
 # 개발 환경 (테스트 포함)
@@ -63,47 +57,149 @@ pip install -e ".[mac,desktop,dev]"
 ### 2. Desktop 인프라 시작
 
 ```bash
-# Kafka + MinIO + PostgreSQL + 모니터링 시작
+# Kafka + MinIO + PostgreSQL+pgvector + Redis + 모니터링 시작
 docker compose -f docker/docker-compose.stream.yml up -d
 ```
 
 ### 3. 파이프라인 실행
 
-**Mac (Ingestor)**:
+**Desktop — 스크립트로 한번에 실행:**
 ```bash
-# 기본 실행 (Tranco Top 1M)
-python mac/run.py
+# 필수 서비스 (Router, Fast/Rich Processor, Storage)
+./desktop/start.sh
 
-# 테스트 모드
-python mac/run.py --test --limit 100
+# 옵션 추가
+./desktop/start.sh --with-url-queue    # + 발견 URL 자동 Redis 재공급
+./desktop/start.sh --with-embedding    # + pgvector 벡터 임베딩 (모델 ~2GB)
+./desktop/start.sh --all               # 전체 실행
 
-# Kafka 서버 지정 (데스크탑 IP)
-python mac/run.py --kafka-servers 192.168.x.x:9092
+# 관리
+./desktop/start.sh status              # 실행 상태 확인
+./desktop/start.sh logs router         # 특정 서비스 로그
+./desktop/start.sh stop                # 전체 중지
 ```
 
-**Desktop (Router + Processor + Storage)** - 각 터미널에서:
+**Mac — 인제스터:**
 ```bash
-# Terminal 1: Router
-python desktop/run_router.py
+# Desktop Kafka IP 지정 실행
+./mac/start.sh --kafka-servers <Desktop-IP>:9092
 
-# Terminal 2: Fast Processor
-python desktop/run_fast_processor.py --workers 4
+# 테스트 모드 (100개)
+./mac/start.sh --test
 
-# Terminal 3: Rich Processor (Crawl4AI)
-python desktop/run_rich_processor.py --workers 2
-
-# Terminal 4: Storage
-python desktop/run_storage.py
+# URL 수 지정
+./mac/start.sh --limit 50000 --kafka-servers <Desktop-IP>:9092
 ```
 
-또는 `runners/` 디렉토리의 전체 실행 스크립트 사용:
+**개별 실행이 필요한 경우** (`runners/` 전체 옵션 사용):
 ```bash
-python runners/ingestor_runner.py
 python runners/router_runner.py
-python runners/fast_processor_runner.py
-python runners/rich_processor_runner.py
+python runners/fast_processor_runner.py --workers 4
+python runners/rich_processor_runner.py --workers 2
 python runners/storage_runner.py
+python runners/url_queue_runner.py
+python runners/embedding_runner.py
 ```
+
+---
+
+## Project Structure
+
+```
+crawler-challenge/
+├── src/
+│   ├── common/              # 공유 모듈
+│   │   ├── compression.py   # Zstd 압축/해제
+│   │   ├── kafka_config.py  # 파이프라인 전체 설정 (토픽, 브로커 등)
+│   │   └── url_extractor.py # URL 정규화 + 트래킹 파라미터 제거
+│   ├── core/                # Sharded Crawler 핵심
+│   │   ├── polite_crawler.py
+│   │   └── database.py
+│   ├── ingestor/            # Layer 1: HTTP 크롤링 + Kafka produce
+│   │   ├── httpx_crawler.py
+│   │   └── kafka_producer.py
+│   ├── router/              # Layer 2: 콘텐츠 분석 + 라우팅
+│   │   ├── page_analyzer.py # 프레임워크 감지, 콘텐츠 통계
+│   │   ├── scoring.py       # 점수 계산 (≥80 → fast, <80 → rich)
+│   │   └── smart_router.py
+│   ├── processor/           # Layer 3: HTML → Markdown 변환
+│   │   ├── base_worker.py   # 공통 Kafka Consumer 로직
+│   │   ├── fast_worker.py   # BeautifulSoup 처리
+│   │   └── rich_worker.py   # Crawl4AI 처리
+│   ├── storage/             # Layer 4: 저장
+│   │   ├── hybrid_storage.py
+│   │   ├── minio_writer.py
+│   │   └── postgres_writer.py
+│   ├── embedding/           # Layer 5: 벡터 임베딩 + RAG 검색
+│   │   ├── chunker.py       # Markdown → 청크 분할
+│   │   ├── embedder.py      # 임베딩 모델 추상화 (local / OpenAI)
+│   │   ├── embedding_worker.py  # Kafka Consumer → pgvector UPSERT
+│   │   └── rag_search.py    # 코사인 유사도 벡터 검색
+│   ├── managers/            # 큐 / 상태 관리
+│   │   ├── sharded_queue_manager.py  # Redis 3-Shard 큐
+│   │   ├── url_queue_consumer.py     # discovered.urls → Redis 적재
+│   │   ├── tranco_manager.py         # URL 우선순위 부여
+│   │   └── progress_tracker.py
+│   └── monitoring/
+│       └── metrics.py       # Prometheus 메트릭 (23개)
+│
+├── runners/                 # 실행 진입점 (전체 CLI 옵션 포함)
+│   ├── sharded_master.py
+│   ├── sharded_worker.py
+│   ├── ingestor_runner.py
+│   ├── router_runner.py
+│   ├── fast_processor_runner.py
+│   ├── rich_processor_runner.py
+│   ├── storage_runner.py
+│   ├── url_queue_runner.py
+│   └── embedding_runner.py
+│
+├── mac/                     # Mac 전용 실행 패키지
+│   ├── run.py               # 인제스터 진입점
+│   ├── start.sh             # 실행 스크립트 (Kafka 연결 확인 포함)
+│   └── requirements.txt
+│
+├── desktop/                 # Desktop 전용 실행 패키지
+│   ├── start.sh             # 파이프라인 일괄 실행/중지/상태 관리
+│   ├── run_router.py
+│   ├── run_fast_processor.py
+│   ├── run_rich_processor.py
+│   ├── run_storage.py
+│   ├── run_url_queue.py     # discovered.urls → Redis 큐
+│   ├── run_embedding.py     # pgvector 임베딩 + RAG 검색
+│   └── requirements.txt
+│
+├── docker/
+│   ├── docker-compose.stream.yml  # 전체 인프라 (Kafka, MinIO, PG, Redis 등)
+│   ├── init-stream.sql            # 스트림 파이프라인 스키마 (pages 테이블 등)
+│   ├── init.sql                   # Sharded Crawler 스키마
+│   ├── migrations/
+│   │   ├── 001_add_crawl_results_table.sql
+│   │   └── 002_add_pgvector.sql   # pgvector 확장 + page_chunks 테이블
+│   ├── prometheus-stream.yml
+│   └── scripts/
+│       └── create-topics.sh       # Kafka 토픽 자동 생성
+│
+├── tests/
+├── docs/
+├── scripts/
+└── pyproject.toml
+```
+
+---
+
+## Kafka Topics
+
+| 토픽 | 생산자 | 소비자 | 설명 |
+|------|--------|--------|------|
+| `raw.page` | Ingestor | Router | HTML 원문 (Zstd 압축) |
+| `process.fast` | Router | FastProcessor | 정적 페이지 |
+| `process.rich` | Router | RichProcessor | 동적 페이지 (JS 렌더링 필요) |
+| `processed.final` | Fast/RichProcessor | Storage, Embedding | 처리 완료 (Markdown + 메타) |
+| `discovered.urls` | Fast/RichProcessor | URL Queue Consumer | 크롤링 중 발견된 링크 |
+| `*.dlq` | 각 레이어 | — | Dead Letter Queue |
+
+---
 
 ## Environment Variables
 
@@ -124,7 +220,7 @@ python runners/storage_runner.py
 | `MINIO_ACCESS_KEY` | `minioadmin` | 접근 키 |
 | `MINIO_SECRET_KEY` | `minioadmin123` | 시크릿 키 |
 
-> **보안 주의**: `MINIO_SECRET_KEY`, `POSTGRES_PASSWORD` 미설정 시 기본값이 사용되며 경고 로그가 출력됩니다. 운영 환경에서는 반드시 환경변수를 설정하세요.
+> **보안 주의**: 운영 환경에서는 `MINIO_SECRET_KEY`, `POSTGRES_PASSWORD`를 반드시 환경변수로 설정하세요.
 
 ### PostgreSQL
 
@@ -154,14 +250,32 @@ python runners/storage_runner.py
 | `PROCESSOR_RICH_WORKERS` | `2` | Rich Worker 수 |
 | `PROCESSOR_BROWSER_POOL` | `5` | 브라우저 풀 크기 |
 
+### Embedding
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `EMBED_BACKEND` | `local` | `local` 또는 `openai` |
+| `EMBED_MODEL_NAME` | `all-MiniLM-L6-v2` | 로컬 임베딩 모델명 (384차원) |
+| `OPENAI_API_KEY` | — | OpenAI 임베딩 사용 시 필수 |
+
+### URL Queue Consumer
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `URL_QUEUE_TOTAL_LIMIT` | `5000000` | 전체 pending URL 상한 |
+| `URL_QUEUE_DOMAIN_LIMIT` | `100` | 도메인별 최대 적재 URL 수 |
+| `REDIS_HOST` | `localhost` | Redis 호스트 |
+
 ### Docker Compose 전용
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `KAFKA_EXTERNAL_HOST` | `localhost` | Kafka 외부 접근 호스트 |
+| `KAFKA_EXTERNAL_HOST` | `localhost` | Kafka 외부 접근 호스트 (Mac → Desktop 연결 시 Desktop IP) |
 | `KAFKA_UI_USER` | `admin` | Kafka UI 로그인 ID |
 | `KAFKA_UI_PASSWORD` | `admin123` | Kafka UI 로그인 비밀번호 |
 | `GRAFANA_PASSWORD` | `admin123` | Grafana 관리자 비밀번호 |
+
+---
 
 ## Monitoring
 
@@ -169,10 +283,42 @@ python runners/storage_runner.py
 
 | 서비스 | URL | 설명 |
 |--------|-----|------|
-| Kafka UI | http://localhost:8080 | Kafka 토픽/컨슈머 모니터링 |
+| Kafka UI | http://localhost:8080 | Kafka 토픽/컨슈머/메시지 모니터링 |
 | MinIO Console | http://localhost:9001 | Object Storage 관리 |
 | Prometheus | http://localhost:9090 | 메트릭 수집 |
 | Grafana | http://localhost:3000 | 대시보드 |
+
+---
+
+## Embedding & RAG Search
+
+```bash
+# 임베딩 워커 실행 (processed.final 소비 → pgvector 저장)
+python desktop/run_embedding.py
+
+# 저장된 벡터로 유사 문서 검색
+python desktop/run_embedding.py --search "검색할 내용"
+
+# 연결 상태 확인
+python desktop/run_embedding.py --test-connection
+
+# 통계 조회
+python desktop/run_embedding.py --stats
+```
+
+### 청크 처리 방식
+
+```
+Markdown 입력
+    ↓  heading 기준 분할 + 최대 500자 단위 청크
+  청크 생성 (URL당 최대 20개)
+    ↓  배치 32개 단위 임베딩
+  벡터 생성 (all-MiniLM-L6-v2 → 384차원)
+    ↓  UPSERT (url + chunk_index 기준 중복 방지)
+  page_chunks 테이블 저장
+```
+
+---
 
 ## Testing
 
@@ -187,28 +333,21 @@ python -m pytest tests/test_processor.py -v
 python -m pytest tests/test_storage.py -v
 ```
 
+---
+
 ## Shared Modules (`src/common/`)
 
-리팩토링을 통해 모든 레이어에서 공유하는 코드를 `src/common/`으로 통합:
+모든 레이어에서 공유하는 모듈.
 
-- **`compression.py`**: Zstd 압축/해제 유틸리티 (`compress()`, `decompress_to_str()`)
-- **`kafka_config.py`**: 파이프라인 전체 설정 (Kafka, MinIO, PostgreSQL 등)
-
-기존 경로(`config/kafka_config.py`, `src/ingestor/compression.py`)는 하위호환을 위해 shim으로 유지됩니다.
+- **`compression.py`**: Zstd 압축/해제 (`compress()`, `decompress_to_str()`)
+- **`kafka_config.py`**: 파이프라인 전체 설정 (Kafka, MinIO, PostgreSQL, 토픽명 등)
+- **`url_extractor.py`**: URL 정규화, 트래킹 파라미터 제거, 유효성 필터링
 
 ```python
 # 권장 import 방식
 from src.common.compression import compress, decompress_to_str
-from src.common.kafka_config import get_config, reset_config
+from src.common.kafka_config import get_config
+from src.common.url_extractor import URLExtractor
 ```
 
-## Kafka Topics
-
-| 토픽 | 설명 |
-|------|------|
-| `raw.page` | Layer 1 → 2: 크롤링된 원본 페이지 (Zstd 압축) |
-| `process.fast` | Layer 2 → 3: 정적 페이지 (BeautifulSoup 처리) |
-| `process.rich` | Layer 2 → 3: 동적 페이지 (Crawl4AI 처리) |
-| `processed.final` | Layer 3 → 4: 처리 완료 결과 |
-| `storage.saved` | 저장 완료 이벤트 |
-| `*.dlq` | 각 레이어의 Dead Letter Queue |
+> 기존 경로(`config/kafka_config.py`, `src/ingestor/compression.py`)는 하위호환 shim으로 유지됩니다.

@@ -438,11 +438,42 @@ class BaseWorker(ABC):
             )
 
             logger.debug(f"Sent result to {target_topic}: {result.url}")
+
+            # 성공 처리된 페이지에서 발견된 URL을 discovered.urls 토픽으로 발행
+            if result.success and result.links:
+                await self._send_discovered_urls(result.url, result.links)
+
             return True
 
         except KafkaError as e:
             logger.error(f"Failed to send result: {e}")
             return False
+
+    async def _send_discovered_urls(self, source_url: str, links: list[str]) -> None:
+        """
+        발견된 URL 목록을 discovered.urls 토픽으로 비동기 발행
+
+        Args:
+            source_url: URL을 발견한 원본 페이지
+            links: 발견된 URL 목록 (절대 URL, 이미 중복 제거됨)
+        """
+        try:
+            message = {
+                'source_url': source_url,
+                'urls': links,
+                'timestamp': time.time(),
+            }
+            # fire-and-forget: 발행 실패가 메인 처리를 중단하지 않도록 send() 사용
+            await self._producer.send(
+                topic=self.topics.discovered_urls,
+                value=message,
+                key=source_url.encode('utf-8'),
+            )
+            logger.debug(f"Sent {len(links)} discovered URLs from {source_url}")
+
+        except Exception as e:
+            # 발견된 URL 발행 실패는 경고만 기록 (크리티컬하지 않음)
+            logger.warning(f"Failed to send discovered URLs from {source_url}: {e}")
 
     def get_stats(self) -> dict:
         """현재 통계 반환"""

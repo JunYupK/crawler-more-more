@@ -10,3 +10,9 @@ msgpack>=1.0.7
 zstandard>=0.22.0
 python-dotenv>=1.0.0
 prometheus-client>=0.20.0
+
+# Embedding (RAG) 의존성
+# 로컬 임베딩 모델 (EMBED_BACKEND=local, 기본값)
+sentence-transformers>=3.0.0
+# OpenAI 임베딩 API (EMBED_BACKEND=openai 시 필요)
+openai>=1.0.0

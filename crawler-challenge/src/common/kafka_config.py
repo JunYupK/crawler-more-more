@@ -57,6 +57,10 @@ class TopicConfig:
     storage_saved: str = "storage.saved"
     storage_dlq: str = "storage.dlq"
 
+    # Layer 5: URL Discovery (Processor → URLQueueConsumer → Redis)
+    discovered_urls: str = "discovered.urls"
+    discovered_urls_dlq: str = "discovered.urls.dlq"
+
     # Monitoring
     metrics_throughput: str = "metrics.throughput"
     metrics_errors: str = "metrics.errors"
