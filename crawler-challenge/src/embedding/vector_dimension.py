@@ -18,10 +18,7 @@ async def get_page_chunks_embedding_dimension(conn) -> Optional[int]:
         """
         SELECT a.atttypmod
         FROM pg_attribute a
-        JOIN pg_class c ON a.attrelid = c.oid
-        JOIN pg_namespace n ON c.relnamespace = n.oid
-        WHERE n.nspname = current_schema()
-          AND c.relname = 'page_chunks'
+        WHERE a.attrelid = to_regclass('page_chunks')
           AND a.attname = 'embedding'
           AND a.attnum > 0
           AND NOT a.attisdropped
@@ -60,4 +57,3 @@ def ensure_dimension_match(
             "Use a compatible local model (e.g. all-MiniLM-L6-v2 for 384), "
             "or migrate/recreate page_chunks.embedding to the new vector dimension."
         )
-
