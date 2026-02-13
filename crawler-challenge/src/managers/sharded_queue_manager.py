@@ -116,6 +116,53 @@ class ShardedRedisQueueManager:
             logger.error(f"샤드 연결 실패: {e}")
             return False
 
+    def is_url_hash_pending(self, url_hash: str) -> bool:
+        """URL 해시가 pending 상태(큐/processing/retry)에 존재하는지 확인"""
+        for shard_id in range(self.num_shards):
+            client = self.redis_clients[shard_id]
+
+            processing_key = self.processing_template.format(shard=shard_id)
+            if client.sismember(processing_key, url_hash):
+                return True
+
+            for queue_template in self.queue_templates.values():
+                queue_key = queue_template.format(shard=shard_id)
+                cursor = 0
+
+                while True:
+                    cursor, entries = client.zscan(queue_key, cursor=cursor)
+                    for raw_data, _ in entries:
+                        try:
+                            parsed = json.loads(raw_data)
+                        except json.JSONDecodeError:
+                            continue
+
+                        pending_url = parsed.get('url')
+                        if pending_url and self._get_url_hash(pending_url) == url_hash:
+                            return True
+
+                    if cursor == 0:
+                        break
+
+            retry_key = self.retry_template.format(shard=shard_id)
+            cursor = 0
+            while True:
+                cursor, entries = client.zscan(retry_key, cursor=cursor)
+                for raw_data, _ in entries:
+                    try:
+                        parsed = json.loads(raw_data)
+                    except json.JSONDecodeError:
+                        continue
+
+                    retry_url = parsed.get('url')
+                    if retry_url and self._get_url_hash(retry_url) == url_hash:
+                        return True
+
+                if cursor == 0:
+                    break
+
+        return False
+
     def initialize_queues(self, url_data: List[Dict]) -> bool:
         """샤딩된 큐 초기화 및 URL 로드"""
         try:
