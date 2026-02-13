@@ -167,14 +167,15 @@ class RAGSearcher:
             return []
 
         # 1. 쿼리 임베딩 생성 (동기 → executor)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         embeddings = await loop.run_in_executor(
             None,
             self._embedder.embed_batch,
             [query],
         )
         query_vector = embeddings[0]
-        vector_str = str(query_vector)  # '[0.1, 0.2, ...]' 형식
+        # pgvector text input: '[f1,f2,...]' 형식으로 명시적 변환
+        vector_str = f"[{','.join(str(x) for x in query_vector)}]"
 
         # 2. pgvector 검색
         try:

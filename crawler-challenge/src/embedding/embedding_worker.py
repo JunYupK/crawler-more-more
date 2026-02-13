@@ -254,7 +254,8 @@ class EmbeddingWorker:
                     if uncommitted >= COMMIT_BATCH or timeout:
                         await self._consumer.commit()
                         uncommitted = 0
-                        last_commit_time = now
+                        # _process_batch() 실행 후 실제 시간으로 갱신 (stale now 방지)
+                        last_commit_time = time.time()
                         logger.info(f"EmbeddingWorker: {self.stats}")
 
                 if max_messages and self.stats.messages_consumed >= max_messages:
@@ -322,7 +323,7 @@ class EmbeddingWorker:
         texts = [chunk.text for _, chunk in all_chunks]
         embed_start = time.time()
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             embeddings: list[list[float]] = await loop.run_in_executor(
                 None,
                 self._embedder.embed_batch,
@@ -362,7 +363,9 @@ class EmbeddingWorker:
                 chunk.chunk_index,
                 chunk.text,
                 chunk.heading_ctx or None,
-                str(embedding),  # pgvector는 '[0.1, 0.2, ...]' 문자열 형식
+                # pgvector text input: '[f1,f2,...]' 형식으로 명시적 변환
+                # Python str(list)는 공백 포함 → 명시적 포맷으로 안전성 확보
+                f"[{','.join(str(x) for x in embedding)}]",
             )
             for (url, chunk), embedding in zip(all_chunks, embeddings)
         ]

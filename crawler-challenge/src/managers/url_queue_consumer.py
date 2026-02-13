@@ -215,18 +215,23 @@ class URLQueueConsumer:
             return
 
         # 3. 각 URL을 동기 Redis 작업으로 처리 (executor 사용)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for url in normalized_urls:
-            added = await loop.run_in_executor(
+            result = await loop.run_in_executor(
                 None,
                 self._try_add_url, url, source_url,
             )
-            if added:
+            # stats 업데이트는 async 컨텍스트에서만 수행 (race condition 방지)
+            if result == 'added':
                 self._stats['urls_added'] += 1
+            elif result == 'dedup':
+                self._stats['urls_skipped_dedup'] += 1
+            elif result == 'domain_limit':
+                self._stats['urls_skipped_domain_limit'] += 1
 
-    def _try_add_url(self, url: str, source_url: str) -> bool:
+    def _try_add_url(self, url: str, source_url: str) -> str:
         """
-        URL 단건 Redis 큐 추가 시도 (동기)
+        URL 단건 Redis 큐 추가 시도 (동기, executor 스레드에서 실행)
 
         처리 순서:
           1. completed set 중복 체크 (모든 샤드)
@@ -235,7 +240,9 @@ class URLQueueConsumer:
           4. 도메인 카운터 증가
 
         Returns:
-            True: 추가 성공 / False: 스킵
+            'added'        : 큐에 추가 성공
+            'dedup'        : 이미 완료된 URL (중복)
+            'domain_limit' : 도메인 상한 초과
         """
         url_hash = self._queue_manager._get_url_hash(url)
         domain = urlparse(url).netloc
@@ -245,15 +252,13 @@ class URLQueueConsumer:
             client = self._queue_manager.redis_clients[shard_id]
             completed_key = self._queue_manager.completed_template.format(shard=shard_id)
             if client.sismember(completed_key, url_hash):
-                self._stats['urls_skipped_dedup'] += 1
-                return False
+                return 'dedup'
 
         # 2. 도메인별 상한 체크 (샤드 0의 Redis에 카운터 저장)
         domain_client = self._queue_manager.redis_clients[0]
         domain_count = int(domain_client.hget(self.DOMAIN_COUNT_KEY, domain) or 0)
         if domain_count >= self.MAX_DOMAIN_URLS:
-            self._stats['urls_skipped_domain_limit'] += 1
-            return False
+            return 'domain_limit'
 
         # 3. priority_low 큐에 추가
         shard_id = self._queue_manager.get_shard_for_url(url)
@@ -273,7 +278,7 @@ class URLQueueConsumer:
         domain_client.hincrby(self.DOMAIN_COUNT_KEY, domain, 1)
 
         logger.debug(f"Added discovered URL: {url} (domain_count={domain_count + 1})")
-        return True
+        return 'added'
 
     def get_stats(self) -> dict:
         """현재 통계 반환"""
