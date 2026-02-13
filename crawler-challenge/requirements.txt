@@ -12,6 +12,7 @@ flask-socketio
 prometheus-client==0.17.1
 redis==5.0.0
 pytest-json-report
+zstandard>=0.22.0
 
 # AI Report Generation
 google-generativeai
