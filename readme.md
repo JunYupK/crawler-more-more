@@ -316,6 +316,12 @@ EMBED_MODEL_NAME=all-mpnet-base-v2 python desktop/run_embedding.py
 | `EMBED_MODEL_NAME` | `all-MiniLM-L6-v2` | 로컬 모델명 (384차원) |
 | `OPENAI_API_KEY` | — | OpenAI 임베딩 사용 시 필수 |
 
+> 운영 권장: 비용/요금 이슈가 있다면 `EMBED_BACKEND=local`만 사용하세요.
+>
+> 주의: `page_chunks.embedding` 컬럼은 기본 마이그레이션에서 `vector(384)`입니다.
+> 다른 차원 모델(예: 768/1536)로 변경하면 차원 불일치가 발생하며,
+> 워커/검색기 시작 시점에 안전하게 실패하도록 검증됩니다.
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---

@@ -56,6 +56,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.embedding.embedding_worker import EmbeddingWorker
 from src.embedding.rag_search import RAGSearcher
+from src.embedding.vector_dimension import (
+    ensure_dimension_match,
+    get_page_chunks_embedding_dimension,
+)
 from src.common.kafka_config import get_config
 
 logging.basicConfig(
@@ -169,6 +173,23 @@ class EmbeddingRunner:
             logger.info(
                 f"Embedder: OK (model={embedder.model_name}, "
                 f"dim={len(test_vec[0])})"
+            )
+
+            # 모델 차원 ↔ DB vector 차원 검증
+            import asyncpg
+            config = get_config()
+            conn = await asyncpg.connect(dsn=config.postgres.dsn)
+            db_dim = await get_page_chunks_embedding_dimension(conn)
+            await conn.close()
+            ensure_dimension_match(
+                component="EmbeddingRunner(test-connection)",
+                model_name=embedder.model_name,
+                model_dimension=embedder.dimension,
+                db_dimension=db_dim,
+            )
+            logger.info(
+                "Embedding dimension check: OK "
+                f"(model_dim={embedder.dimension}, db_dim={db_dim})"
             )
         except Exception as e:
             logger.error(f"Embedder: FAILED - {e}")

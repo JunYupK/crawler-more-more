@@ -33,6 +33,10 @@ from src.common.kafka_config import get_config
 from src.embedding.chunker import MarkdownChunker, Chunk
 from src.embedding.embedder import BaseEmbedder, create_embedder
 from src.embedding.stats import EmbeddingStats
+from src.embedding.vector_dimension import (
+    ensure_dimension_match,
+    get_page_chunks_embedding_dimension,
+)
 
 if TYPE_CHECKING:
     import asyncpg
@@ -137,6 +141,17 @@ class EmbeddingWorker:
             max_size=5,
             command_timeout=30,
         )
+
+        # 모델 차원과 DB vector 차원 일치 검증
+        async with self._pg_pool.acquire() as conn:
+            db_dim = await get_page_chunks_embedding_dimension(conn)
+        ensure_dimension_match(
+            component="EmbeddingWorker",
+            model_name=self._embedder.model_name,
+            model_dimension=self._embedder.dimension,
+            db_dimension=db_dim,
+        )
+
         logger.info("PostgreSQL pool ready")
 
         # Kafka Consumer
