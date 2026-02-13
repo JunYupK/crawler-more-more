@@ -122,7 +122,7 @@ services:
   # Database: PostgreSQL (Metadata)
   # ============================================
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15  # pgvector 확장 포함 (RAG 임베딩 저장용)
     container_name: postgres
     hostname: postgres
     ports:
@@ -133,7 +133,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-crawler_stream}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../docker/init-stream.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../docker/init-stream.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ../docker/migrations/002_add_pgvector.sql:/docker-entrypoint-initdb.d/02_pgvector.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crawler} -d ${POSTGRES_DB:-crawler_stream}"]
       interval: 5s
