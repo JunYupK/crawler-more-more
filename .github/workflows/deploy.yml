@@ -41,12 +41,12 @@ jobs:
         run: |
           pytest -q tests/test_kafka_url_embedding.py tests/test_entrypoint_separation.py
 
-  deploy:
+  # ── Mac 배포 (Docker 기반 sharded crawler) ───────────────────────────
+  deploy_mac:
     name: Deploy to Mac
     needs: pre_deploy_tests
-    # push 시 자동 배포, 또는 workflow_dispatch accept 모드 시 배포
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_mode == 'accept')
-    runs-on: self-hosted
+    runs-on: [self-hosted, mac]
     defaults:
       run:
         working-directory: ./crawler-challenge
@@ -71,6 +71,43 @@ jobs:
         run: |
           sleep 5
           docker compose -f mac/docker-compose.yml ps
+
+  # ── Desktop 배포 (Python 네이티브 파이프라인) ────────────────────────
+  deploy_desktop:
+    name: Deploy to Desktop
+    needs: pre_deploy_tests
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_mode == 'accept')
+    runs-on: [self-hosted, desktop]
+    defaults:
+      run:
+        working-directory: ./crawler-challenge
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install/update Python dependencies
+        run: |
+          pip install -e ".[desktop]"
+
+      - name: Restart pipeline services
+        run: |
+          echo "Desktop 파이프라인 재시작"
+
+          # 1. 기존 서비스 중지
+          ./desktop/start.sh stop || true
+
+          # 2. 인프라 컨테이너 최신화 (Kafka, MinIO, PostgreSQL, Redis)
+          docker compose -f desktop/docker-compose.yml up -d
+
+          # 3. 파이프라인 서비스 재시작
+          nohup ./desktop/start.sh > /dev/null 2>&1 &
+
+          # 시작 대기
+          sleep 3
+
+      - name: Health Check (서비스 상태 확인)
+        run: |
+          ./desktop/start.sh status
 
   deploy_skipped_notice:
     name: Deploy skipped (check mode)

@@ -48,7 +48,7 @@ class TestZstdCompressor:
 
     def test_compress_string(self):
         """문자열 압축 테스트"""
-        from src.ingestor.compression import ZstdCompressor
+        from src.common.compression import ZstdCompressor
 
         compressor = ZstdCompressor(level=3)
         original = "Hello, World! " * 100
@@ -60,7 +60,7 @@ class TestZstdCompressor:
 
     def test_compress_bytes(self):
         """바이트 압축 테스트"""
-        from src.ingestor.compression import ZstdCompressor
+        from src.common.compression import ZstdCompressor
 
         compressor = ZstdCompressor(level=3)
         original = b"Hello, World! " * 100
@@ -72,7 +72,7 @@ class TestZstdCompressor:
 
     def test_decompress(self):
         """압축 해제 테스트"""
-        from src.ingestor.compression import ZstdCompressor
+        from src.common.compression import ZstdCompressor
 
         compressor = ZstdCompressor(level=3)
         original = b"Hello, World! " * 100
@@ -84,7 +84,7 @@ class TestZstdCompressor:
 
     def test_decompress_to_str(self):
         """압축 해제 후 문자열 변환 테스트"""
-        from src.ingestor.compression import ZstdCompressor
+        from src.common.compression import ZstdCompressor
 
         compressor = ZstdCompressor(level=3)
         original = "안녕하세요, 세계! " * 100
@@ -96,7 +96,7 @@ class TestZstdCompressor:
 
     def test_compression_ratio(self):
         """압축률 계산 테스트"""
-        from src.ingestor.compression import ZstdCompressor
+        from src.common.compression import ZstdCompressor
 
         original = b"AAAAAAAAAA" * 1000  # 높은 압축률 예상
         compressed = ZstdCompressor(level=3).compress(original)
@@ -107,7 +107,7 @@ class TestZstdCompressor:
 
     def test_convenience_functions(self):
         """간편 함수 테스트"""
-        from src.ingestor.compression import compress, decompress, decompress_to_str
+        from src.common.compression import compress, decompress, decompress_to_str
 
         original = "Test string" * 50
 
@@ -124,7 +124,7 @@ class TestCompressionStats:
 
     def test_record_and_ratio(self):
         """통계 기록 및 비율 계산 테스트"""
-        from src.ingestor.compression import CompressionStats
+        from src.common.compression import CompressionStats
 
         stats = CompressionStats()
         stats.record(1000, 300)
@@ -362,7 +362,7 @@ def run_quick_test():
 
     # 1. ZstdCompressor 테스트
     print("\n1. Testing ZstdCompressor...")
-    from src.ingestor.compression import ZstdCompressor, CompressionStats
+    from src.common.compression import ZstdCompressor, CompressionStats
 
     compressor = ZstdCompressor(level=3)
     original = "Hello, World! " * 100

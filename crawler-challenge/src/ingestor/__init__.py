@@ -15,7 +15,7 @@ Components:
 
 from .httpx_crawler import HighSpeedIngestor
 from .kafka_producer import KafkaPageProducer
-from .compression import ZstdCompressor
+from src.common.compression import ZstdCompressor
 
 __all__ = [
     "HighSpeedIngestor",
