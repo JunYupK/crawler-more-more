@@ -22,7 +22,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../docker/init.sql:/docker-entrypoint-initdb.d/init.sql
     restart: always
     # DB가 완전히 켜졌는지 확인하는 헬스체크 (크롤러들의 안정적 접속을 위해)
     healthcheck:
@@ -39,7 +39,7 @@ services:
       DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/crawler_db?sslmode=disable"
       PG_EXPORTER_EXTEND_QUERY_PATH: "/queries.yaml"
     volumes:
-      - ./docker/queries.yaml:/queries.yaml:ro
+      - ../docker/queries.yaml:/queries.yaml:ro
     depends_on:
       - postgres
     restart: always
@@ -49,7 +49,7 @@ services:
     ports:
       - "8000:8000"
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-master
     # 대화형 입력 활성화 (start 명령 대기)
@@ -67,9 +67,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - PROMETHEUS_URL=http://100.105.22.101:9090
     volumes:
-      - ./logs:/app/logs
-      - ./docs/reports:/app/docs/reports
-      - ./.env:/app/.env:ro
+      - ../logs:/app/logs
+      - ../docs/reports:/app/docs/reports
+      - ../.env:/app/.env:ro
     depends_on:
       redis:
         condition: service_started
@@ -79,7 +79,7 @@ services:
 
   crawler-worker-1:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-1
     command: python runners/sharded_worker.py --worker-id 1
@@ -91,7 +91,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./logs:/app/logs
+      - ../logs:/app/logs
     depends_on:
       crawler-master:
         condition: service_started
@@ -99,7 +99,7 @@ services:
 
   crawler-worker-2:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-2
     command: python runners/sharded_worker.py --worker-id 2
@@ -111,7 +111,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./logs:/app/logs
+      - ../logs:/app/logs
     depends_on:
       crawler-master:
         condition: service_started
@@ -119,7 +119,7 @@ services:
 
   crawler-worker-3:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-3
     command: python runners/sharded_worker.py --worker-id 3
@@ -131,7 +131,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./logs:/app/logs
+      - ../logs:/app/logs
     depends_on:
       crawler-master:
         condition: service_started
@@ -139,7 +139,7 @@ services:
 
   crawler-worker-4:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-4
     command: python runners/sharded_worker.py --worker-id 4
@@ -151,7 +151,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./logs:/app/logs
+      - ../logs:/app/logs
     depends_on:
       crawler-master:
         condition: service_started
@@ -159,7 +159,7 @@ services:
 
   crawler-worker-5:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-5
     command: python runners/sharded_worker.py --worker-id 5
@@ -171,7 +171,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./logs:/app/logs
+      - ../logs:/app/logs
     depends_on:
       crawler-master:
         condition: service_started
@@ -179,7 +179,7 @@ services:
 
   crawler-worker-6:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-6
     command: python runners/sharded_worker.py --worker-id 6
@@ -191,7 +191,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./logs:/app/logs
+      - ../logs:/app/logs
     depends_on:
       crawler-master:
         condition: service_started
@@ -199,7 +199,7 @@ services:
 
   crawler-worker-7:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-7
     command: python runners/sharded_worker.py --worker-id 7
@@ -211,7 +211,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./logs:/app/logs
+      - ../logs:/app/logs
     depends_on:
       crawler-master:
         condition: service_started
@@ -219,7 +219,7 @@ services:
 
   crawler-worker-8:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
     container_name: crawler-worker-8
     command: python runners/sharded_worker.py --worker-id 8
@@ -231,7 +231,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./logs:/app/logs
+      - ../logs:/app/logs
     depends_on:
       crawler-master:
         condition: service_started
