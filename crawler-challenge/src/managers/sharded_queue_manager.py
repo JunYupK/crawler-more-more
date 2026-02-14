@@ -69,6 +69,7 @@ class ShardedRedisQueueManager:
         self.completed_template = 'crawler:shard{shard}:completed'
         self.failed_template = 'crawler:shard{shard}:failed'
         self.retry_template = 'crawler:shard{shard}:retry'
+        self.pending_hashes_template = 'crawler:shard{shard}:pending_hashes'
 
         # 도메인별 상태 관리 (도메인 해시에 따라 샤드 결정)
         self.domain_stats_template = 'crawler:shard{shard}:domain_stats'
@@ -121,45 +122,9 @@ class ShardedRedisQueueManager:
         for shard_id in range(self.num_shards):
             client = self.redis_clients[shard_id]
 
-            processing_key = self.processing_template.format(shard=shard_id)
-            if client.sismember(processing_key, url_hash):
+            pending_key = self.pending_hashes_template.format(shard=shard_id)
+            if client.sismember(pending_key, url_hash):
                 return True
-
-            for queue_template in self.queue_templates.values():
-                queue_key = queue_template.format(shard=shard_id)
-                cursor = 0
-
-                while True:
-                    cursor, entries = client.zscan(queue_key, cursor=cursor)
-                    for raw_data, _ in entries:
-                        try:
-                            parsed = json.loads(raw_data)
-                        except json.JSONDecodeError:
-                            continue
-
-                        pending_url = parsed.get('url')
-                        if pending_url and self._get_url_hash(pending_url) == url_hash:
-                            return True
-
-                    if cursor == 0:
-                        break
-
-            retry_key = self.retry_template.format(shard=shard_id)
-            cursor = 0
-            while True:
-                cursor, entries = client.zscan(retry_key, cursor=cursor)
-                for raw_data, _ in entries:
-                    try:
-                        parsed = json.loads(raw_data)
-                    except json.JSONDecodeError:
-                        continue
-
-                    retry_url = parsed.get('url')
-                    if retry_url and self._get_url_hash(retry_url) == url_hash:
-                        return True
-
-                if cursor == 0:
-                    break
 
         return False
 
@@ -200,6 +165,8 @@ class ShardedRedisQueueManager:
 
                 # 해당 샤드의 큐에 추가
                 client.zadd(queue_key, {url_data_str: priority})
+                pending_key = self.pending_hashes_template.format(shard=shard_id)
+                client.sadd(pending_key, self._get_url_hash(url))
                 shard_counts[shard_id][category] += 1
                 total_counts[category] += 1
 
@@ -320,11 +287,13 @@ class ShardedRedisQueueManager:
             # 처리 중 세트에서 제거
             processing_key = self.processing_template.format(shard=shard_id)
             client.srem(processing_key, url_hash)
+            pending_key = self.pending_hashes_template.format(shard=shard_id)
 
             if success:
                 # 완료 세트에 추가
                 completed_key = self.completed_template.format(shard=shard_id)
                 client.sadd(completed_key, url_hash)
+                client.srem(pending_key, url_hash)
 
                 # 도메인 통계 업데이트 (성공)
                 domain_stats_key = self.domain_stats_template.format(shard=shard_id)
@@ -359,6 +328,10 @@ class ShardedRedisQueueManager:
                     if retry_data['retry_count'] <= 3:  # 최대 3회 재시도
                         retry_key = self.retry_template.format(shard=shard_id)
                         client.zadd(retry_key, {json.dumps(retry_data): time.time() + 1800})  # 30분 후
+                    else:
+                        client.srem(pending_key, url_hash)
+                else:
+                    client.srem(pending_key, url_hash)
 
         except Exception as e:
             logger.error(f"완료 처리 실패 ({url}): {e}")
@@ -524,6 +497,7 @@ class ShardedRedisQueueManager:
                     self.completed_template.format(shard=shard_id),
                     self.failed_template.format(shard=shard_id),
                     self.retry_template.format(shard=shard_id),
+                    self.pending_hashes_template.format(shard=shard_id),
                     self.domain_stats_template.format(shard=shard_id),
                     self.domain_delays_template.format(shard=shard_id)
                 ])

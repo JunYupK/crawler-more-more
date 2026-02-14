@@ -15,6 +15,7 @@ class FakeRedisClient:
         self.hashes = {}
         self.zadd_calls = []
         self.hincr_calls = []
+        self.sadd_calls = []
 
     def sismember(self, key, value):
         return value in self.sets.get(key, set())
@@ -28,6 +29,9 @@ class FakeRedisClient:
     def hincrby(self, key, field, amount):
         self.hincr_calls.append((key, field, amount))
 
+    def sadd(self, key, value):
+        self.sadd_calls.append((key, value))
+
 
 class FakeQueueManager:
     def __init__(self):
@@ -35,6 +39,7 @@ class FakeQueueManager:
         self.redis_clients = [FakeRedisClient()]
         self.completed_template = 'completed:{shard}'
         self.queue_templates = {'priority_low': 'queue:low:{shard}'}
+        self.pending_hashes_template = 'pending:{shard}'
         self._pending = False
         self.pending_check_calls = 0
 
@@ -80,6 +85,16 @@ def test_try_add_url_dedup_pending():
     assert client.zadd_calls == []
     assert client.hincr_calls == []
 
+
+def test_try_add_url_added_updates_pending_index():
+    consumer = _build_consumer()
+
+    result = consumer._try_add_url('https://example.com/a', 'https://example.com')
+
+    assert result == 'added'
+    client = consumer._queue_manager.redis_clients[0]
+    assert len(client.zadd_calls) == 1
+    assert client.sadd_calls == [('pending:0', 'hash:https://example.com/a')]
 
 def test_process_message_tracks_pending_dedup_stats(monkeypatch):
     consumer = _build_consumer()
