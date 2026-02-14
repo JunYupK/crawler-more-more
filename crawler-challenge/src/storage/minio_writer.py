@@ -176,6 +176,10 @@ class MinIOWriter:
             logger.error(f"Failed to ensure bucket {bucket}: {e}")
             return False
 
+    def _sanitize_metadata_value(self, value: str) -> str:
+        """S3 메타데이터 값을 ASCII-safe로 변환 (latin-1 인코딩 호환)"""
+        return value.encode('ascii', errors='ignore').decode('ascii')
+
     def _url_to_key(self, url: str, extension: str = "") -> str:
         """
         URL을 저장 키로 변환
@@ -280,16 +284,18 @@ class MinIOWriter:
             data = BytesIO(content_bytes)
             size = len(content_bytes)
 
-            # 메타데이터 준비
+            # 메타데이터 준비 (S3 HTTP 헤더는 latin-1만 허용 → ASCII-safe 변환)
             minio_metadata = {
-                "x-amz-meta-original-url": url[:256],  # S3 메타데이터 크기 제한
+                "x-amz-meta-original-url": self._sanitize_metadata_value(url[:256]),
                 "x-amz-meta-original-size": str(original_size),
                 "x-amz-meta-compressed": str(self.compress),
             }
             if metadata:
                 for k, v in metadata.items():
                     if isinstance(v, str) and len(v) < 256:
-                        minio_metadata[f"x-amz-meta-{k}"] = v
+                        safe_v = self._sanitize_metadata_value(v)
+                        if safe_v:
+                            minio_metadata[f"x-amz-meta-{k}"] = safe_v
 
             # 업로드 (동기 → 비동기)
             loop = asyncio.get_running_loop()

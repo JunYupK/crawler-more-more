@@ -278,14 +278,29 @@ class HybridStorage:
 
             # 1. MinIO에 Markdown 저장
             markdown = message.get('markdown')
-            if markdown:
-                minio_markdown = await self.minio.store_markdown(
+            if not markdown:
+                logger.warning(f"No markdown content for {url}, skipping storage")
+                self.stats.messages_failed += 1
+                return None
+
+            minio_markdown = await self.minio.store_markdown(
+                url=url,
+                markdown=markdown,
+                metadata={
+                    'processor': message.get('processor_type', 'unknown'),
+                    'title': (message.get('metadata', {}).get('title') or '')[:100],
+                }
+            )
+
+            if not minio_markdown:
+                # MinIO 저장 실패 → markdown_key NOT NULL 제약으로 PostgreSQL 저장 불가
+                logger.error(f"MinIO storage failed for {url}, skipping PostgreSQL save")
+                self.stats.messages_failed += 1
+                return StorageResult(
                     url=url,
-                    markdown=markdown,
-                    metadata={
-                        'processor': message.get('processor_type', 'unknown'),
-                        'title': (message.get('metadata', {}).get('title') or '')[:100],
-                    }
+                    success=False,
+                    error="MinIO storage failed",
+                    processing_time_ms=(time.time() - start_time) * 1000,
                 )
 
             # 2. MinIO에 Raw HTML 저장 (옵션)
