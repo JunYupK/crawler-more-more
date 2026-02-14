@@ -24,6 +24,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 PYTHON="${PYTHON:-python3}"
+VENV_PATH="${VENV_PATH:-$HOME/venv}"
+
+# ----------------------------------------------------------------------------
+# venv 자동 감지 및 활성화
+# ----------------------------------------------------------------------------
+if [[ -z "${VIRTUAL_ENV:-}" && -f "$VENV_PATH/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "$VENV_PATH/bin/activate"
+    echo -e "\033[0;32m[INFO]\033[0m  venv 자동 활성화: $VENV_PATH"
+elif [[ -n "${VIRTUAL_ENV:-}" ]]; then
+    echo -e "\033[0;32m[INFO]\033[0m  venv 이미 활성화됨: $VIRTUAL_ENV"
+fi
 
 # 색상 출력
 GREEN='\033[0;32m'
