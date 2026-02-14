@@ -12,7 +12,7 @@ async def get_page_chunks_embedding_dimension(conn) -> Optional[int]:
     """
     Return configured dimension of page_chunks.embedding vector column.
 
-    PostgreSQL stores vector(N) typmod as N + 4 for pgvector, so subtract 4.
+    pgvector stores vector(N) typmod directly as N (no offset).
     """
     row = await conn.fetchrow(
         """
@@ -34,7 +34,7 @@ async def get_page_chunks_embedding_dimension(conn) -> Optional[int]:
     if atttypmod is None or atttypmod < 0:
         return None
 
-    dim = int(atttypmod) - 4
+    dim = int(atttypmod)
     return dim if dim > 0 else None
 
 
