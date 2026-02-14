@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy_mode:
-        description: "배포 모드 (accept 일 때만 배포 실행)"
+        description: "배포 모드 (check: 테스트만, accept: 테스트+배포)"
         required: true
         default: "check"
         type: choice
@@ -42,9 +42,10 @@ jobs:
           pytest -q tests/test_kafka_url_embedding.py tests/test_entrypoint_separation.py
 
   deploy:
-    name: Deploy (accept mode only)
+    name: Deploy to Mac
     needs: pre_deploy_tests
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_mode == 'accept'
+    # push 시 자동 배포, 또는 workflow_dispatch accept 모드 시 배포
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_mode == 'accept')
     runs-on: self-hosted
     defaults:
       run:
@@ -55,13 +56,13 @@ jobs:
 
       - name: Deploy with Docker Compose
         run: |
-          echo "🚀 배포 시작: 기존 컨테이너 중지 및 최신 코드 빌드"
+          echo "배포 시작: 기존 컨테이너 중지 및 최신 코드 빌드"
 
           # 1. 최신 코드로 이미지 다시 빌드 (캐시 활용)
-          docker compose build
+          docker compose -f mac/docker-compose.yml build
 
           # 2. 컨테이너 재시작 (변경된 부분만 감지해서 교체함)
-          docker compose up -d
+          docker compose -f mac/docker-compose.yml up -d
 
           # 3. 불필요한 이미지 정리 (용량 확보)
           docker image prune -f
@@ -69,10 +70,10 @@ jobs:
       - name: Health Check (생존 확인)
         run: |
           sleep 5
-          docker compose ps
+          docker compose -f mac/docker-compose.yml ps
 
   deploy_skipped_notice:
-    name: Deploy skipped notice
+    name: Deploy skipped (check mode)
     needs: pre_deploy_tests
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_mode != 'accept'
     runs-on: ubuntu-latest
