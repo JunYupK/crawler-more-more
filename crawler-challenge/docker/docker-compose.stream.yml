@@ -55,6 +55,11 @@ services:
       # Compression
       KAFKA_COMPRESSION_TYPE: lz4
       KAFKA_LOG_CLEANUP_POLICY: delete
+      # Single broker settings
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       # Memory
       KAFKA_HEAP_OPTS: "-Xmx2G -Xms1G"
     volumes:
@@ -174,42 +179,6 @@ services:
     networks:
       - stream-network
 
-  # ============================================
-  # Monitoring: Prometheus
-  # ============================================
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus-stream.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.enable-lifecycle'
-    networks:
-      - stream-network
-
-  # ============================================
-  # Monitoring: Grafana
-  # ============================================
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
-    networks:
-      - stream-network
-
 # ============================================
 # Volumes
 # ============================================
@@ -225,10 +194,6 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
     driver: local
 
 # ============================================
