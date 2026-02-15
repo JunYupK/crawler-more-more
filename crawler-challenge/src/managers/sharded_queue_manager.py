@@ -59,6 +59,7 @@ class ShardedRedisQueueManager:
         # 큐 이름 템플릿 (샤드별로 생성됨)
         self.queue_templates = {
             'priority_high': 'crawler:shard{shard}:queue:priority_high',
+            'priority_custom': 'crawler:shard{shard}:queue:priority_custom',
             'priority_medium': 'crawler:shard{shard}:queue:priority_medium',
             'priority_normal': 'crawler:shard{shard}:queue:priority_normal',
             'priority_low': 'crawler:shard{shard}:queue:priority_low'
@@ -172,8 +173,8 @@ class ShardedRedisQueueManager:
             self.clear_all_queues()
 
             # 샤드별 통계
-            shard_counts = [{'high': 0, 'medium': 0, 'normal': 0, 'low': 0} for _ in range(self.num_shards)]
-            total_counts = {'high': 0, 'medium': 0, 'normal': 0, 'low': 0}
+            shard_counts = [{'high': 0, 'custom': 0, 'medium': 0, 'normal': 0, 'low': 0} for _ in range(self.num_shards)]
+            total_counts = {'high': 0, 'custom': 0, 'medium': 0, 'normal': 0, 'low': 0}
 
             # URL을 도메인별로 적절한 샤드에 분산
             for url_info in url_data:
@@ -185,7 +186,10 @@ class ShardedRedisQueueManager:
                 url_data_str = json.dumps(url_info)
 
                 # 우선순위별 큐 결정
-                if priority >= 900:
+                if url_info.get('url_type') == 'custom':
+                    queue_key = self.queue_templates['priority_custom'].format(shard=shard_id)
+                    category = 'custom'
+                elif priority >= 900:
                     queue_key = self.queue_templates['priority_high'].format(shard=shard_id)
                     category = 'high'
                 elif priority >= 800:
@@ -396,7 +400,7 @@ class ShardedRedisQueueManager:
                 shard_stats.append(shard_stat)
 
             # 전체 통계 계산
-            for key in ['queue_priority_high', 'queue_priority_medium', 'queue_priority_normal', 'queue_priority_low',
+            for key in ['queue_priority_high', 'queue_priority_custom', 'queue_priority_medium', 'queue_priority_normal', 'queue_priority_low',
                        'processing', 'completed', 'failed', 'retry', 'total_pending']:
                 total_stats[key] = sum(shard.get(key, 0) for shard in shard_stats)
 

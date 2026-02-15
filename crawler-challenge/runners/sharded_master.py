@@ -19,6 +19,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.managers.tranco_manager import TrancoManager
 from src.managers.sharded_queue_manager import ShardedRedisQueueManager
 from src.managers.progress_tracker import ProgressTracker
+from src.managers.seed_manager import SeedManager
 
 # 로깅 설정
 def setup_logging():
@@ -100,7 +101,13 @@ class ShardedCrawlerMaster:
             logging.error(f"샤딩 마스터 초기화 실패: {e}")
             return False
 
-    async def prepare_work(self, url_count: int = 400) -> bool:
+    async def prepare_work(
+        self,
+        url_count: int = 400,
+        seeds: Optional[list[str]] = None,
+        seed_file: Optional[str] = None,
+        depth: int = 3,
+    ) -> bool:
         """작업 준비 및 샤딩된 큐에 배포"""
         try:
             logging.info(f"=== 샤딩된 작업 준비 ({url_count}개 URL) ===")
@@ -115,6 +122,29 @@ class ShardedCrawlerMaster:
             if not self.queue_manager.initialize_queues(urls):
                 logging.error("샤딩된 큐 초기화 실패")
                 return False
+
+            # Custom seed URL 추가 적재 (선택)
+            if seeds or seed_file:
+                seed_manager = SeedManager(self.queue_manager)
+                added_count = 0
+
+                if seed_file:
+                    try:
+                        added_count += seed_manager.add_seeds_from_file(
+                            seed_file,
+                            max_depth=depth,
+                        )
+                    except Exception as e:
+                        logging.error(f"Seed 파일 로드 실패 ({seed_file}): {e}")
+                        return False
+
+                if seeds:
+                    for seed_url in seeds:
+                        if seed_manager.add_seed(seed_url, max_depth=depth):
+                            added_count += 1
+
+                logging.info(f"Custom seed 적재 완료: {added_count}개 추가")
+
             # 통계 출력
             queue_stats = self.queue_manager.get_queue_stats()
             # [Metric] 4. 초기 상태 반영
@@ -130,6 +160,7 @@ class ShardedCrawlerMaster:
             logging.info(f"  - 총 URL: {queue_stats.get('total_urls', 0)}개")
             logging.info(f"  - 샤드 수: {queue_stats.get('num_shards', 0)}개")
             logging.info(f"  - 고우선순위: {queue_stats.get('queue_priority_high', 0)}")
+            logging.info(f"  - 커스텀: {queue_stats.get('queue_priority_custom', 0)}")
             logging.info(f"  - 중우선순위: {queue_stats.get('queue_priority_medium', 0)}")
             logging.info(f"  - 일반우선순위: {queue_stats.get('queue_priority_normal', 0)}")
             logging.info(f"  - 저우선순위: {queue_stats.get('queue_priority_low', 0)}")
@@ -352,7 +383,14 @@ class ShardedCrawlerMaster:
                 print("\n\n❌ 사용자에 의해 취소되었습니다.")
                 return False
 
-    async def run(self, url_count: int = 400, auto_start: bool = False):
+    async def run(
+        self,
+        url_count: int = 400,
+        auto_start: bool = False,
+        seeds: Optional[list[str]] = None,
+        seed_file: Optional[str] = None,
+        depth: int = 3,
+    ):
         """
         샤딩 마스터 실행
 
@@ -367,7 +405,12 @@ class ShardedCrawlerMaster:
                 return False
 
             # 작업 준비
-            if not await self.prepare_work(url_count):
+            if not await self.prepare_work(
+                url_count=url_count,
+                seeds=seeds,
+                seed_file=seed_file,
+                depth=depth,
+            ):
                 logging.error("샤딩된 작업 준비 실패")
                 return False
 
@@ -390,6 +433,9 @@ async def main():
     parser = argparse.ArgumentParser(description='Sharded Distributed Crawler - Master')
     parser.add_argument('--count', type=int, default=400, help='크롤링할 URL 개수')
     parser.add_argument('--workers', type=int, default=4, help='워커 수')
+    parser.add_argument('--seed', type=str, nargs='+', help='Custom seed URLs')
+    parser.add_argument('--seed-file', type=str, help='Custom seed URL 파일')
+    parser.add_argument('--depth', type=int, default=3, help='최대 탐색 깊이')
     parser.add_argument('--auto-start', action='store_true',
                         help='즉시 크롤링 시작 (기본: 사용자 입력 대기)')
 
@@ -405,7 +451,13 @@ async def main():
         print("⏳ 수동 시작 모드 (시작 신호 대기)")
 
     master = ShardedCrawlerMaster(worker_count=args.workers)
-    success = await master.run(url_count=args.count, auto_start=args.auto_start)
+    success = await master.run(
+        url_count=args.count,
+        auto_start=args.auto_start,
+        seeds=args.seed,
+        seed_file=args.seed_file,
+        depth=args.depth,
+    )
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":

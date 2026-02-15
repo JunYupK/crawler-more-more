@@ -8,7 +8,6 @@ import asyncio
 import logging
 import signal
 import argparse
-import time
 from datetime import datetime
 from typing import List, Dict, Optional
 from enum import Enum
@@ -18,7 +17,8 @@ from urllib.parse import urlparse
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.core.polite_crawler import PoliteCrawler
-from src.core.database import DatabaseManager
+from src.common.compression import ZstdCompressor
+from src.ingestor.kafka_producer import KafkaPageProducer
 from src.managers.sharded_queue_manager import ShardedRedisQueueManager
 from src.monitoring.metrics import MetricsManager
 
@@ -109,7 +109,7 @@ class ShardedCrawlerWorker:
 
         # 샤딩된 Redis 연결 설정
         redis_host = os.getenv('REDIS_HOST', 'localhost')
-        postgres_host = os.getenv('POSTGRES_HOST', 'localhost')
+        kafka_servers = os.getenv('KAFKA_SERVERS', 'localhost:9092')
 
         shard_configs = [
             {'host': redis_host, 'port': 6379, 'db': 1},
@@ -119,7 +119,9 @@ class ShardedCrawlerWorker:
 
         # 컴포넌트들
         self.queue_manager = ShardedRedisQueueManager(shard_configs)
-        self.db_manager = DatabaseManager(host=postgres_host)
+        self.kafka_servers = kafka_servers
+        self.producer: Optional[KafkaPageProducer] = None
+        self.compressor = ZstdCompressor(level=3)
 
         # Prometheus 메트릭 (워커별 포트: 8000 + worker_id, Worker 역할)
         # worker_id=1 → 8001, worker_id=2 → 8002, ...
@@ -160,6 +162,11 @@ class ShardedCrawlerWorker:
             except Exception as e:
                 logging.warning(f"Prometheus 서버 시작 실패 (계속 진행): {e}")
 
+            # Kafka Producer 시작
+            self.producer = KafkaPageProducer(bootstrap_servers=self.kafka_servers)
+            await self.producer.start()
+            logging.info(f"[OK] Kafka Producer 시작 완료 ({self.kafka_servers})")
+
             logging.info(f"[OK] 샤딩 워커 {self.worker_id} 초기화 완료 (랜덤 샤드 선택)")
             return True
 
@@ -171,6 +178,9 @@ class ShardedCrawlerWorker:
         """배치 처리 (샤드 정보 포함)"""
         try:
             if not batch:
+                return False
+            if not self.producer:
+                logging.error("Kafka producer가 초기화되지 않았습니다")
                 return False
 
             batch_urls = [item['url'] for item in batch]
@@ -196,27 +206,79 @@ class ShardedCrawlerWorker:
                 for i, result in enumerate(results):
                     original_item = batch[i] if i < len(batch) else {}
                     shard_id = original_item.get('shard_id', -1)
+                    scope = original_item.get('scope')
 
                     try:
                         if result['success'] and result.get('content'):
-                            # 성공 - 데이터베이스에 저장
-                            self.db_manager.add_to_batch(result['url'], result['content'])
-                            self.queue_manager.mark_completed(result['url'], success=True, shard_id=shard_id)
-                            successful_count += 1
+                            # 성공 - raw.page 토픽으로 전송
+                            html_bytes = result['content'].encode('utf-8', errors='replace')
+                            html_compressed = self.compressor.compress(html_bytes)
 
-                            # 샤드별 성공 통계
-                            if shard_id not in self.shard_distribution:
-                                self.shard_distribution[shard_id] = {'success': 0, 'failed': 0}
-                            self.shard_distribution[shard_id]['success'] += 1
+                            metadata = {
+                                'redirect_url': None,
+                                'raw_size': len(html_bytes),
+                                'compressed_size': len(html_compressed),
+                            }
+                            if scope:
+                                metadata['scope'] = scope
 
-                            # Prometheus 메트릭 기록 (성공)
-                            self.metrics.record_crawl_result(self.worker_id, {
-                                'success': True,
-                                'url': result['url'],
-                                'domain': result.get('domain', urlparse(result['url']).netloc),
-                                'status_code': result.get('status'),
-                                'response_time': result.get('response_time')
-                            })
+                            sent = await self.producer.send_raw_page(
+                                url=result['url'],
+                                html_compressed=html_compressed,
+                                status_code=result.get('status', 200),
+                                headers=result.get('headers', {}),
+                                crawl_time_ms=result.get('response_time', 0) * 1000,
+                                metadata=metadata,
+                            )
+
+                            if sent:
+                                self.queue_manager.mark_completed(result['url'], success=True, shard_id=shard_id)
+                                successful_count += 1
+
+                                # 샤드별 성공 통계
+                                if shard_id not in self.shard_distribution:
+                                    self.shard_distribution[shard_id] = {'success': 0, 'failed': 0}
+                                self.shard_distribution[shard_id]['success'] += 1
+
+                                # Prometheus 메트릭 기록 (성공)
+                                self.metrics.record_crawl_result(self.worker_id, {
+                                    'success': True,
+                                    'url': result['url'],
+                                    'domain': result.get('domain', urlparse(result['url']).netloc),
+                                    'status_code': result.get('status'),
+                                    'response_time': result.get('response_time')
+                                })
+                            else:
+                                domain = result.get('domain', urlparse(result['url']).netloc)
+                                error_info = {
+                                    'type': 'kafka_send_failed',
+                                    'message': 'Failed to publish crawled page to Kafka raw.page',
+                                    'status_code': None,
+                                    'domain': domain,
+                                    'recoverable': True,
+                                    'worker_id': self.worker_id,
+                                    'shard_id': shard_id,
+                                    'timestamp': datetime.now().isoformat()
+                                }
+                                self.queue_manager.mark_completed(
+                                    result['url'],
+                                    success=False,
+                                    error_info=error_info,
+                                    shard_id=shard_id
+                                )
+                                failed_count += 1
+                                if shard_id not in self.shard_distribution:
+                                    self.shard_distribution[shard_id] = {'success': 0, 'failed': 0}
+                                self.shard_distribution[shard_id]['failed'] += 1
+                                self.error_type_stats['kafka_send_failed'] = self.error_type_stats.get('kafka_send_failed', 0) + 1
+                                self.metrics.record_crawl_result(self.worker_id, {
+                                    'success': False,
+                                    'url': result['url'],
+                                    'domain': domain,
+                                    'error_type': 'kafka_send_failed',
+                                    'status_code': None,
+                                    'response_time': result.get('response_time')
+                                })
 
                         else:
                             # 실패 처리 - 에러 타입 분류
@@ -254,6 +316,19 @@ class ShardedCrawlerWorker:
                                 f"Worker ID:     {self.worker_id}\n"
                                 f"Shard ID:      {shard_id}\n"
                                 f"{'='*60}"
+                            )
+
+                            await self.producer.send_to_dlq(
+                                url=result['url'],
+                                error_type=error_type,
+                                error_message=error_message,
+                                metadata={
+                                    'status_code': status_code,
+                                    'domain': domain,
+                                    'worker_id': self.worker_id,
+                                    'shard_id': shard_id,
+                                    'scope': scope,
+                                },
                             )
 
                             self.queue_manager.mark_completed(
@@ -364,15 +439,22 @@ class ShardedCrawlerWorker:
                 total = stats['success'] + stats['failed']
                 logging.info(f"  샤드 {shard_id}: {total}개 ({stats['success']}성공, {stats['failed']}실패)")
 
-            # DB 정리
-            if self.db_manager:
-                self.db_manager.flush_batch()
-                self.db_manager.close_all_connections()
+            # Producer 정리
+            if self.producer:
+                try:
+                    await self.producer.stop()
+                except Exception as stop_error:
+                    logging.warning(f"Kafka Producer 종료 중 오류: {stop_error}")
 
             return True
 
         except Exception as e:
             logging.error(f"샤딩 워커 {self.worker_id} 실행 오류: {e}")
+            if self.producer:
+                try:
+                    await self.producer.stop()
+                except Exception as stop_error:
+                    logging.warning(f"Kafka Producer 종료 중 오류: {stop_error}")
             return False
 
 async def main():

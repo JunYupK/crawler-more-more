@@ -25,11 +25,15 @@ Usage:
     KAFKA_BOOTSTRAP_SERVERS   Kafka 브로커 주소 (기본: localhost:9092)
     URL_QUEUE_TOTAL_LIMIT     총 pending URL 상한 (기본: 5,000,000)
     URL_QUEUE_DOMAIN_LIMIT    도메인별 최대 추가 수 (기본: 100)
+    URL_QUEUE_REDIS_HOST      URL 재적재 대상 Redis 호스트 (기본: REDIS_HOST 또는 localhost)
+    URL_QUEUE_REDIS_PORT      URL 재적재 대상 Redis 포트 (기본: 6379)
+    URL_QUEUE_REDIS_DB_START  샤드 시작 DB 번호 (기본: 1 → 1,2,3 사용)
     REDIS_HOST                Redis 호스트 (기본: localhost)
 """
 
 import asyncio
 import argparse
+import os
 import logging
 import signal
 import sys
@@ -83,6 +87,11 @@ class URLQueueRunner:
         logger.info("=" * 60)
         logger.info("URL Queue Runner starting")
         logger.info(f"  Kafka: {self.kafka_servers}")
+        logger.info(
+            "  Redis target: "
+            f"{os.getenv('URL_QUEUE_REDIS_HOST', os.getenv('REDIS_HOST', 'localhost'))}:"
+            f"{os.getenv('URL_QUEUE_REDIS_PORT', '6379')}"
+        )
         logger.info(f"  Total queue limit: {URLQueueConsumer.TOTAL_QUEUE_LIMIT:,}")
         logger.info(f"  Domain limit: {URLQueueConsumer.MAX_DOMAIN_URLS}")
         logger.info("=" * 60)

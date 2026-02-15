@@ -59,6 +59,7 @@ class ProcessedResult:
     original_score: int = 0
     content_length: int = 0
     markdown_length: int = 0
+    source_metadata: Optional[dict] = None
 
     # 에러 (실패 시)
     error_type: Optional[str] = None
@@ -394,6 +395,7 @@ class BaseWorker(ABC):
             result.original_timestamp = original_timestamp
             result.router_timestamp = router_timestamp
             result.original_score = score
+            result.source_metadata = metadata
 
             # 처리 시간
             processing_time_ms = (time.time() - start_time) * 1000
@@ -441,7 +443,11 @@ class BaseWorker(ABC):
 
             # 성공 처리된 페이지에서 발견된 URL을 discovered.urls 토픽으로 발행
             if result.success and result.links:
-                await self._send_discovered_urls(result.url, result.links)
+                await self._send_discovered_urls(
+                    result.url,
+                    result.links,
+                    result.source_metadata or {},
+                )
 
             return True
 
@@ -449,13 +455,14 @@ class BaseWorker(ABC):
             logger.error(f"Failed to send result: {e}")
             return False
 
-    async def _send_discovered_urls(self, source_url: str, links: list[str]) -> None:
+    async def _send_discovered_urls(self, source_url: str, links: list[str], metadata: dict) -> None:
         """
         발견된 URL 목록을 discovered.urls 토픽으로 비동기 발행
 
         Args:
             source_url: URL을 발견한 원본 페이지
             links: 발견된 URL 목록 (절대 URL, 이미 중복 제거됨)
+            metadata: 원본 raw.page 메타데이터
         """
         try:
             message = {
@@ -463,6 +470,10 @@ class BaseWorker(ABC):
                 'urls': links,
                 'timestamp': time.time(),
             }
+            scope = metadata.get('scope')
+            if scope:
+                message['scope'] = scope
+                message['current_depth'] = scope.get('current_depth', 0) + 1
             # fire-and-forget: 발행 실패가 메인 처리를 중단하지 않도록 send() 사용
             await self._producer.send(
                 topic=self.topics.discovered_urls,

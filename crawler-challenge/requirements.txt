@@ -1,9 +1,11 @@
 aiohttp
+aiokafka>=0.10.0
 aioredis
 beautifulsoup4
 psutil
 matplotlib
 numpy
+msgpack>=1.0.7
 psycopg2-binary
 asyncpg>=0.29.0
 tranco

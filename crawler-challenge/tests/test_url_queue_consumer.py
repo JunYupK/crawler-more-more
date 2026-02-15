@@ -1,5 +1,6 @@
 import sys
 import types
+import json
 
 
 # aiokafka가 테스트 환경에 없을 수 있어 import stub 제공
@@ -34,7 +35,10 @@ class FakeQueueManager:
         self.num_shards = 1
         self.redis_clients = [FakeRedisClient()]
         self.completed_template = 'completed:{shard}'
-        self.queue_templates = {'priority_low': 'queue:low:{shard}'}
+        self.queue_templates = {
+            'priority_low': 'queue:low:{shard}',
+            'priority_custom': 'queue:custom:{shard}',
+        }
         self._pending = False
         self.pending_check_calls = 0
 
@@ -65,6 +69,7 @@ def _build_consumer():
         'urls_skipped_domain_limit': 0,
         'urls_skipped_queue_limit': 0,
         'urls_skipped_invalid': 0,
+        'urls_skipped_scope': 0,
     }
     return consumer
 
@@ -102,3 +107,62 @@ def test_process_message_tracks_pending_dedup_stats(monkeypatch):
     assert consumer._stats['urls_skipped_dedup'] == 1
     assert consumer._stats['urls_skipped_dedup_pending'] == 1
     assert consumer._stats['urls_skipped_dedup_completed'] == 0
+
+
+def test_try_add_scoped_url_adds_to_priority_custom_queue():
+    consumer = _build_consumer()
+
+    scope = {
+        'seed_url': 'https://example.com/news/',
+        'allowed_domain': 'example.com',
+        'path_prefix': '/news',
+        'max_depth': 3,
+        'max_pages': 10,
+        'current_depth': 0,
+    }
+
+    result = consumer._try_add_scoped_url(
+        'https://example.com/news/a',
+        'https://example.com/news/',
+        scope,
+        1,
+    )
+
+    assert result == 'added'
+    client = consumer._queue_manager.redis_clients[0]
+    assert len(client.zadd_calls) == 1
+
+    key, mapping = client.zadd_calls[0]
+    assert key == 'queue:custom:0'
+    payload = json.loads(next(iter(mapping.keys())))
+    assert payload['url_type'] == 'custom'
+    assert payload['scope']['current_depth'] == 1
+    assert payload['scope']['seed_url'] == 'https://example.com/news/'
+    assert client.hincr_calls == [
+        (URLQueueConsumer.SCOPE_PAGE_COUNT_KEY, 'https://example.com/news/', 1)
+    ]
+
+
+def test_try_add_scoped_url_rejects_depth_over_limit():
+    consumer = _build_consumer()
+
+    scope = {
+        'seed_url': 'https://example.com/',
+        'allowed_domain': 'example.com',
+        'path_prefix': '/',
+        'max_depth': 2,
+        'max_pages': 10,
+        'current_depth': 1,
+    }
+
+    result = consumer._try_add_scoped_url(
+        'https://example.com/next',
+        'https://example.com/current',
+        scope,
+        3,
+    )
+
+    assert result == 'scope_depth_limit'
+    client = consumer._queue_manager.redis_clients[0]
+    assert client.zadd_calls == []
+    assert client.hincr_calls == []
