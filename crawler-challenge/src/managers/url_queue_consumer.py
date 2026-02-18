@@ -46,9 +46,11 @@ class URLQueueConsumer:
 
     # 발견된 URL의 우선순위 (Tranco 원본 700~1000보다 낮게)
     DISCOVERED_PRIORITY = 500
+    CUSTOM_DISCOVERED_PRIORITY = 850
 
     # 도메인별 카운터를 저장하는 Redis 키 (샤드 0, DB 1에 저장)
     DOMAIN_COUNT_KEY = "crawler:discovered:domain_counts"
+    SCOPE_PAGE_COUNT_KEY = "crawler:scope:pages_crawled"
 
     def __init__(
         self,
@@ -65,7 +67,8 @@ class URLQueueConsumer:
         self.topics = config.topics
 
         self._consumer: Optional[AIOKafkaConsumer] = None
-        self._queue_manager = ShardedRedisQueueManager(shard_configs)
+        effective_shard_configs = shard_configs or self._build_default_shard_configs()
+        self._queue_manager = ShardedRedisQueueManager(effective_shard_configs)
         self._running = False
 
         # 통계
@@ -79,13 +82,33 @@ class URLQueueConsumer:
             'urls_skipped_domain_limit': 0,
             'urls_skipped_queue_limit': 0,
             'urls_skipped_invalid': 0,
+            'urls_skipped_scope': 0,
         }
 
         logger.info(
             f"URLQueueConsumer initialized: "
             f"total_limit={self.TOTAL_QUEUE_LIMIT:,}, "
-            f"domain_limit={self.MAX_DOMAIN_URLS}"
+            f"domain_limit={self.MAX_DOMAIN_URLS}, "
+            f"redis_target={effective_shard_configs[0]['host']}:{effective_shard_configs[0]['port']}"
         )
+
+    def _build_default_shard_configs(self) -> list[dict]:
+        """
+        URL 재적재용 기본 Redis 샤드 설정 생성.
+
+        우선순위:
+        1) URL_QUEUE_REDIS_HOST/PORT/DB_START
+        2) REDIS_HOST
+        3) localhost
+        """
+        redis_host = os.getenv("URL_QUEUE_REDIS_HOST", os.getenv("REDIS_HOST", "localhost"))
+        redis_port = int(os.getenv("URL_QUEUE_REDIS_PORT", "6379"))
+        db_start = int(os.getenv("URL_QUEUE_REDIS_DB_START", "1"))
+        return [
+            {'host': redis_host, 'port': redis_port, 'db': db_start},
+            {'host': redis_host, 'port': redis_port, 'db': db_start + 1},
+            {'host': redis_host, 'port': redis_port, 'db': db_start + 2},
+        ]
 
     async def start(self) -> None:
         """Consumer 시작"""
@@ -190,6 +213,8 @@ class URLQueueConsumer:
         """
         source_url = message.get('source_url', '')
         raw_urls: list = message.get('urls', [])
+        scope = message.get('scope')
+        current_depth = int(message.get('current_depth', 0))
 
         self._stats['messages_consumed'] += 1
         self._stats['urls_received'] += len(raw_urls)
@@ -219,10 +244,20 @@ class URLQueueConsumer:
         # 3. 각 URL을 동기 Redis 작업으로 처리 (executor 사용)
         loop = asyncio.get_running_loop()
         for url in normalized_urls:
-            result = await loop.run_in_executor(
-                None,
-                self._try_add_url, url, source_url,
-            )
+            if scope:
+                result = await loop.run_in_executor(
+                    None,
+                    self._try_add_scoped_url,
+                    url,
+                    source_url,
+                    scope,
+                    current_depth,
+                )
+            else:
+                result = await loop.run_in_executor(
+                    None,
+                    self._try_add_url, url, source_url,
+                )
             # stats 업데이트는 async 컨텍스트에서만 수행 (race condition 방지)
             if result == 'added':
                 self._stats['urls_added'] += 1
@@ -234,6 +269,23 @@ class URLQueueConsumer:
                 self._stats['urls_skipped_dedup_pending'] += 1
             elif result == 'domain_limit':
                 self._stats['urls_skipped_domain_limit'] += 1
+            elif result in ('scope_filtered', 'scope_depth_limit', 'scope_page_limit'):
+                self._stats['urls_skipped_scope'] += 1
+
+    def _check_duplicate(self, url_hash: str) -> str | None:
+        """중복 상태 확인"""
+        # 1. completed 중복 체크
+        for shard_id in range(self._queue_manager.num_shards):
+            client = self._queue_manager.redis_clients[shard_id]
+            completed_key = self._queue_manager.completed_template.format(shard=shard_id)
+            if client.sismember(completed_key, url_hash):
+                return 'dedup_completed'
+
+        # 2. pending 상태 중복 체크
+        if self._queue_manager.is_url_hash_pending(url_hash):
+            return 'dedup_pending'
+
+        return None
 
     def _try_add_url(self, url: str, source_url: str) -> str:
         """
@@ -255,16 +307,9 @@ class URLQueueConsumer:
         url_hash = self._queue_manager._get_url_hash(url)
         domain = urlparse(url).netloc
 
-        # 1. 중복 체크: 모든 샤드의 completed set 확인
-        for shard_id in range(self._queue_manager.num_shards):
-            client = self._queue_manager.redis_clients[shard_id]
-            completed_key = self._queue_manager.completed_template.format(shard=shard_id)
-            if client.sismember(completed_key, url_hash):
-                return 'dedup_completed'
-
-        # 2. 중복 체크: pending 상태(큐/processing/retry) 확인
-        if self._queue_manager.is_url_hash_pending(url_hash):
-            return 'dedup_pending'
+        duplicate = self._check_duplicate(url_hash)
+        if duplicate:
+            return duplicate
 
         # 3. 도메인별 상한 체크 (샤드 0의 Redis에 카운터 저장)
         domain_client = self._queue_manager.redis_clients[0]
@@ -290,6 +335,83 @@ class URLQueueConsumer:
         domain_client.hincrby(self.DOMAIN_COUNT_KEY, domain, 1)
 
         logger.debug(f"Added discovered URL: {url} (domain_count={domain_count + 1})")
+        return 'added'
+
+    def _try_add_scoped_url(
+        self,
+        url: str,
+        source_url: str,
+        scope: dict,
+        current_depth: int,
+    ) -> str:
+        """
+        scope가 포함된 URL 단건 추가 시도
+
+        처리 순서:
+          1. 중복 체크
+          2. scope.allowed_domain / path_prefix 매칭
+          3. max_depth 확인
+          4. max_pages 확인 (Redis atomic counter)
+          5. priority_custom 큐에 추가 (도메인 제한 미적용)
+        """
+        url_hash = self._queue_manager._get_url_hash(url)
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        path = parsed.path or "/"
+
+        duplicate = self._check_duplicate(url_hash)
+        if duplicate:
+            return duplicate
+
+        allowed_domain = str(scope.get('allowed_domain', '')).lower()
+        path_prefix = str(scope.get('path_prefix', '/') or '/')
+        if not path_prefix.startswith('/'):
+            path_prefix = f"/{path_prefix}"
+        if not allowed_domain:
+            return 'scope_filtered'
+
+        if domain != allowed_domain:
+            return 'scope_filtered'
+        if not path.startswith(path_prefix):
+            return 'scope_filtered'
+
+        max_depth = int(scope.get('max_depth', 3))
+        if current_depth > max_depth:
+            return 'scope_depth_limit'
+
+        max_pages = int(scope.get('max_pages', 10000))
+        seed_url = str(scope.get('seed_url', ''))
+        if not seed_url:
+            seed_url = f"https://{allowed_domain}{path_prefix}"
+
+        counter_client = self._queue_manager.redis_clients[0]
+        pages_crawled = int(counter_client.hget(self.SCOPE_PAGE_COUNT_KEY, seed_url) or 0)
+        if pages_crawled >= max_pages:
+            return 'scope_page_limit'
+
+        shard_id = self._queue_manager.get_shard_for_url(url)
+        client = self._queue_manager.redis_clients[shard_id]
+        queue_key = self._queue_manager.queue_templates['priority_custom'].format(shard=shard_id)
+
+        next_scope = dict(scope)
+        next_scope['current_depth'] = current_depth
+        next_scope['pages_crawled'] = pages_crawled + 1
+
+        url_data = json.dumps({
+            'url': url,
+            'domain': domain,
+            'priority': self.CUSTOM_DISCOVERED_PRIORITY,
+            'url_type': 'custom',
+            'source_url': source_url,
+            'scope': next_scope,
+        })
+        client.zadd(queue_key, {url_data: self.CUSTOM_DISCOVERED_PRIORITY})
+        counter_client.hincrby(self.SCOPE_PAGE_COUNT_KEY, seed_url, 1)
+
+        logger.debug(
+            "Added scoped URL: %s (seed=%s, depth=%s/%s, pages=%s/%s)",
+            url, seed_url, current_depth, max_depth, pages_crawled + 1, max_pages
+        )
         return 'added'
 
     def get_stats(self) -> dict:

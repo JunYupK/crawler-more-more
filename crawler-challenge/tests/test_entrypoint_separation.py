@@ -14,12 +14,10 @@ def _read(rel_path: str) -> str:
     return (PROJECT_ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def test_mac_entrypoint_targets_ingestor_only():
-    src = _read("mac/run.py")
-
-    assert "from runners.ingestor_runner import main" in src
-    assert "url_queue_runner" not in src
-    assert "embedding_runner" not in src
+def test_mac_ingestor_entrypoints_removed():
+    assert not (PROJECT_ROOT / "mac/run.py").exists()
+    assert not (PROJECT_ROOT / "mac/start.sh").exists()
+    assert not (PROJECT_ROOT / "runners/ingestor_runner.py").exists()
 
 
 def test_desktop_url_queue_entrypoint_targets_url_queue_runner():
