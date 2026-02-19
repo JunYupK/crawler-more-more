@@ -163,6 +163,42 @@ services:
     networks:
       - stream-network
 
+  # ============================================
+  # RAG Search API
+  # ============================================
+  search-api:
+    image: python:3.11-slim
+    container_name: search-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8600:8600"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-crawler_stream}
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crawler123}
+      EMBED_BACKEND: ${EMBED_BACKEND:-local}
+      EMBED_MODEL_NAME: ${EMBED_MODEL_NAME:-all-MiniLM-L6-v2}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ../:/app:ro
+      - huggingface_cache:/root/.cache/huggingface
+    working_dir: /app
+    command: >
+      bash -c "pip install -q fastapi 'uvicorn[standard]' asyncpg sentence-transformers python-dotenv &&
+               python desktop/run_api.py --host 0.0.0.0 --port 8600"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8600/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - stream-network
+
 # ============================================
 # Volumes
 # ============================================
@@ -174,6 +210,8 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  huggingface_cache:
     driver: local
 
 # ============================================
