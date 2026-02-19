@@ -3,20 +3,24 @@
 # =============================================================================
 #
 # 사용법:
-#   make test-crawl                    # Mac 크롤링 테스트 (100개 URL)
-#   make test-crawl CRAWL_LIMIT=500    # URL 개수 지정
-#   make test-crawl-full               # 전체 1M URL 크롤링
-#   make status                        # Desktop 파이프라인 상태 확인
-#   make restart-desktop               # Desktop 서비스 재시작
-#   make stop-desktop                  # Desktop 서비스 중지
-#   make logs SVC=router               # 특정 서비스 로그 확인
+#   make test-crawl                     # Mac 크롤링 테스트 (100개 URL, 워커 1개)
+#   make test-crawl CRAWL_LIMIT=500     # URL 개수 지정
+#   make test-crawl WORKERS=2           # 워커 수 지정
+#   make test-crawl-full                # 전체 1M URL 크롤링 (워커 4개)
+#   make status                         # Desktop 파이프라인 상태 확인
+#   make restart-desktop                # Desktop 서비스 재시작
+#   make stop-desktop                   # Desktop 서비스 중지
+#   make logs SVC=router                # 특정 서비스 로그 확인
+#
+# Mac 크롤링 구조:
+#   sharded_master  — Redis 샤드 큐에 URL 로딩 + 진행 모니터링
+#   sharded_worker  — Redis 큐에서 URL 소비 → HTTP 크롤링 → Kafka produce
 #
 # =============================================================================
 
 # ── 설정 변수 (필요시 override 가능) ──────────────────────────────────────
-KAFKA_SERVERS  ?= 100.105.22.101:9092
 CRAWL_LIMIT    ?= 100
-MAX_CONCURRENT ?= 500
+WORKERS        ?= 1
 VENV_PATH      ?= $(HOME)/venv
 PYTHON         ?= python3
 SVC            ?=
@@ -27,30 +31,46 @@ MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 .PHONY: test-crawl test-crawl-full status restart-desktop stop-desktop logs help
 
 # ── 테스트 크롤링 (Mac) ──────────────────────────────────────────────────
-# venv를 자동 활성화하고 인제스터를 실행합니다.
-# 기존에 수동으로 하던 것: source ~/venv/bin/activate && python mac/run.py --test
+# 1. sharded_master: CRAWL_LIMIT 개 URL을 Redis 샤드 큐에 로딩 후 모니터링
+# 2. sharded_worker(s): Redis 큐에서 URL 소비하여 실제 크롤링 수행
 test-crawl:
-	@echo "==> 크롤링 테스트 시작 ($(CRAWL_LIMIT)개 URL, Kafka: $(KAFKA_SERVERS))"
+	@echo "==> 크롤링 테스트 시작 ($(CRAWL_LIMIT)개 URL, 워커 $(WORKERS)개)"
 	@bash -c '\
 		if [ -f "$(VENV_PATH)/bin/activate" ]; then \
 			source "$(VENV_PATH)/bin/activate"; \
 		fi; \
-		cd "$(MAKEFILE_DIR)" && \
-		$(PYTHON) mac/run.py --test --limit $(CRAWL_LIMIT) \
-			--max-concurrent $(MAX_CONCURRENT) \
-			--kafka-servers $(KAFKA_SERVERS)'
+		cd "$(MAKEFILE_DIR)"; \
+		$(PYTHON) runners/sharded_master.py --count $(CRAWL_LIMIT) --auto-start & \
+		MASTER_PID=$$!; \
+		trap "kill $$MASTER_PID 2>/dev/null || true; exit" INT TERM EXIT; \
+		sleep 3; \
+		WORKER_PIDS=; \
+		for i in $$(seq 1 $(WORKERS)); do \
+			$(PYTHON) runners/sharded_worker.py --worker-id $$i & \
+			WORKER_PIDS="$$WORKER_PIDS $$!"; \
+		done; \
+		wait $$WORKER_PIDS; \
+		kill $$MASTER_PID 2>/dev/null || true'
 
-# 전체 크롤링 (Tranco Top 1M)
+# 전체 크롤링 (Tranco Top 1M, 워커 4개)
 test-crawl-full:
-	@echo "==> 전체 크롤링 시작 (1M URLs, Kafka: $(KAFKA_SERVERS))"
+	@echo "==> 전체 크롤링 시작 (1M URLs, 워커 4개)"
 	@bash -c '\
 		if [ -f "$(VENV_PATH)/bin/activate" ]; then \
 			source "$(VENV_PATH)/bin/activate"; \
 		fi; \
-		cd "$(MAKEFILE_DIR)" && \
-		$(PYTHON) mac/run.py \
-			--max-concurrent $(MAX_CONCURRENT) \
-			--kafka-servers $(KAFKA_SERVERS)'
+		cd "$(MAKEFILE_DIR)"; \
+		$(PYTHON) runners/sharded_master.py --count 1000000 --auto-start & \
+		MASTER_PID=$$!; \
+		trap "kill $$MASTER_PID 2>/dev/null || true; exit" INT TERM EXIT; \
+		sleep 5; \
+		WORKER_PIDS=; \
+		for i in 1 2 3 4; do \
+			$(PYTHON) runners/sharded_worker.py --worker-id $$i & \
+			WORKER_PIDS="$$WORKER_PIDS $$!"; \
+		done; \
+		wait $$WORKER_PIDS; \
+		kill $$MASTER_PID 2>/dev/null || true'
 
 # ── Desktop 파이프라인 관리 ──────────────────────────────────────────────
 status:
@@ -81,9 +101,10 @@ help:
 	@echo "  ─────────────────────────────────────────────────────"
 	@echo ""
 	@echo "  테스트:"
-	@echo "    make test-crawl                   100개 URL 테스트 크롤링"
+	@echo "    make test-crawl                   100개 URL 테스트 크롤링 (워커 1개)"
 	@echo "    make test-crawl CRAWL_LIMIT=500   URL 개수 지정"
-	@echo "    make test-crawl-full              전체 1M URL 크롤링"
+	@echo "    make test-crawl WORKERS=2          워커 수 지정"
+	@echo "    make test-crawl-full              전체 1M URL 크롤링 (워커 4개)"
 	@echo ""
 	@echo "  Desktop 관리:"
 	@echo "    make status                       파이프라인 상태 확인"
@@ -92,8 +113,7 @@ help:
 	@echo "    make logs SVC=router              로그 확인"
 	@echo ""
 	@echo "  설정 변수 (override 가능):"
-	@echo "    KAFKA_SERVERS   Kafka 주소       (기본: $(KAFKA_SERVERS))"
 	@echo "    CRAWL_LIMIT     테스트 URL 수    (기본: $(CRAWL_LIMIT))"
-	@echo "    MAX_CONCURRENT  동시 요청 수     (기본: $(MAX_CONCURRENT))"
+	@echo "    WORKERS         워커 프로세스 수 (기본: $(WORKERS))"
 	@echo "    VENV_PATH       venv 경로        (기본: $(VENV_PATH))"
 	@echo ""
