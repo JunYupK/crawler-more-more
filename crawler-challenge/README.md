@@ -5,24 +5,59 @@
 ## Architecture
 
 ```
-Mac (Layer 1)                    Desktop (Layer 2~6)
-┌──────────────┐                 ┌────────────────────────────────────────────┐
-│   Ingestor   │                 │  ┌──────────────────────────────────────┐  │
-│  HTTP Crawl  │──── Kafka ─────►│  │           Kafka Stream Pipeline      │  │
-│  Zstd 압축   │   (raw.page)    │  │                                      │  │
-│  500 동시요청 │                 │  │  Router                              │  │
-└──────────────┘                 │  │    ├─ process.fast → FastProcessor   │  │
-                                 │  │    │    (BeautifulSoup)               │  │
-                                 │  │    └─ process.rich → RichProcessor   │  │
-                                 │  │         (Crawl4AI)                   │  │
-                                 │  │              ↓                       │  │
-                                 │  │       processed.final                │  │
-                                 │  │         ├─ Storage  (MinIO + PG)     │  │
-                                 │  │         ├─ Embedding (pgvector RAG)  │  │
-                                 │  │         └─ URL Queue ──► Redis 큐    │  │
-                                 │  │              ↑ 피드백 루프            │  │
-                                 │  └──────────────────────────────────────┘  │
-                                 └────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  Mac  (Layer 1 — Ingestor)                                                  ║
+║                                                                              ║
+║  ┌─────────────────────────────────────────┐                                ║
+║  │  httpx  ·  500 concurrent  ·  15s timeout│                               ║
+║  │  Zstd compress (level 3)                 │                               ║
+║  │  → Kafka  raw.page  (10 MB msg limit)    │                               ║
+║  └──────────────────────┬──────────────────┘                                ║
+╚═════════════════════════│════════════════════════════════════════════════════╝
+                          │  Kafka (KRaft, 12 partitions)
+╔═════════════════════════▼════════════════════════════════════════════════════╗
+║  Desktop  (Layers 2 – 6)                                                    ║
+║                                                                              ║
+║  Layer 2 ─ Router  ──────────────────────────────────────────────────────   ║
+║  │  page_analyzer  →  scoring (threshold 80)                                ║
+║  │  score ≥ 80  →  process.fast  (≈70% traffic)                            ║
+║  └  score  < 80  →  process.rich  (≈30% traffic)                           ║
+║                                                                              ║
+║  Layer 3 ─ Processors  ──────────────────────────────────────────────────   ║
+║  │  FastProcessor  (×6 workers)   BeautifulSoup + lxml  →  Markdown        ║
+║  └  RichProcessor  (×2 workers)   Crawl4AI + Playwright  →  Markdown       ║
+║                   ↓  processed.final  (Markdown + metadata)                 ║
+║                                                                              ║
+║  Layer 4 ─ Storage  ─────────────────────────────────────────────────────   ║
+║  │  MinIO        raw HTML / processed Markdown (S3-compatible)              ║
+║  └  PostgreSQL   pages 테이블  (메타데이터 · 중복·DLQ 관리)                 ║
+║                                                                              ║
+║  Layer 5 ─ Embedding  ───────────────────────────────────────────────────   ║
+║  │  Chunker       Heading 기준 분할  ·  최대 500자  ·  URL당 20청크        ║
+║  │  Embedder      local: all-MiniLM-L6-v2 (384d)                           ║
+║  │                openai: text-embedding-3-small (1536d)                    ║
+║  └  pgvector      IVFFlat index  ·  cosine similarity  ·  UPSERT           ║
+║                                                                              ║
+║  Layer 6 ─ Search API  ──────────────────────────────────────────────────   ║
+║     FastAPI + uvicorn  :8600                                                 ║
+║     GET /search   자연어 → 임베딩 → pgvector 검색 → JSON                   ║
+║     GET /stats    임베딩 현황 (URL 수 · 청크 수)                            ║
+║     GET /chunk    특정 URL의 전체 청크 조회                                  ║
+║     GET /health   DB + 모델 상태 확인                                        ║
+║     GET /docs     Swagger UI (자동 생성)                                     ║
+║                                                                              ║
+║  URL 피드백 루프  ────────────────────────────────────────────────────────   ║
+║  Processor  →  discovered.urls (Kafka)  →  URL Queue Consumer               ║
+║  →  Redis priority_low 큐  →  Mac Ingestor 재수집                           ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Infrastructure
+  Kafka (KRaft)    메시지 버스     :9092   │  Kafka UI    :8080
+  MinIO            오브젝트 스토리지 :9000   │  Console     :9001
+  PostgreSQL+pgv   메타데이터·벡터  :5432
+  Redis            URL 큐          :6379
+  Prometheus       메트릭 수집      :9090   │  Grafana     :3000
+  Search API       RAG HTTP API    :8600   │  Swagger     :8600/docs
 ```
 
 ### URL 자동 재공급 (피드백 루프)
@@ -135,6 +170,8 @@ crawler-challenge/
 │   │   ├── embedder.py      # 임베딩 모델 추상화 (local / OpenAI)
 │   │   ├── embedding_worker.py  # Kafka Consumer → pgvector UPSERT
 │   │   └── rag_search.py    # 코사인 유사도 벡터 검색
+│   ├── api/                 # Layer 6: HTTP Search API
+│   │   └── search_api.py    # FastAPI 앱 (search / stats / chunk / health)
 │   ├── managers/            # 큐 / 상태 관리
 │   │   ├── sharded_queue_manager.py  # Redis 3-Shard 큐
 │   │   ├── url_queue_consumer.py     # discovered.urls → Redis 적재
@@ -167,6 +204,7 @@ crawler-challenge/
 │   ├── run_storage.py
 │   ├── run_url_queue.py     # discovered.urls → Redis 큐
 │   ├── run_embedding.py     # pgvector 임베딩 + RAG 검색
+│   ├── run_api.py           # Search API 서버 (FastAPI + uvicorn :8600)
 │   └── requirements.txt
 │
 ├── docker/
@@ -287,6 +325,8 @@ crawler-challenge/
 | MinIO Console | http://localhost:9001 | Object Storage 관리 |
 | Prometheus | http://localhost:9090 | 메트릭 수집 |
 | Grafana | http://localhost:3000 | 대시보드 |
+| Search API | http://localhost:8600 | RAG 벡터 검색 REST API |
+| Swagger UI | http://localhost:8600/docs | Search API 문서 (자동 생성) |
 
 ---
 
@@ -316,6 +356,84 @@ Markdown 입력
   벡터 생성 (all-MiniLM-L6-v2 → 384차원)
     ↓  UPSERT (url + chunk_index 기준 중복 방지)
   page_chunks 테이블 저장
+```
+
+---
+
+## Search API (HTTP)
+
+임베딩된 문서를 HTTP로 검색할 수 있는 REST API 서버. Swagger UI가 자동 생성됩니다.
+
+### 실행
+
+```bash
+# 직접 실행 (기본 포트 8600)
+python desktop/run_api.py
+
+# 포트 지정
+python desktop/run_api.py --port 8601
+
+# Docker Compose로 실행 (PostgreSQL과 함께)
+docker compose -f desktop/docker-compose.yml up search-api
+
+# 설치 (별도 환경)
+pip install -e ".[desktop,api]"
+```
+
+### Endpoints
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `GET` | `/search?q=...` | 자연어 벡터 검색 |
+| `GET` | `/stats` | 임베딩 현황 통계 |
+| `GET` | `/chunk?url=...` | 특정 URL의 전체 청크 조회 |
+| `GET` | `/health` | DB + 모델 상태 확인 |
+| `GET` | `/docs` | Swagger UI |
+
+### 사용 예시
+
+```bash
+# 자연어 검색 (기본 top_k=5)
+curl "http://localhost:8600/search?q=크롤러 성능 최적화"
+
+# 도메인 필터 + 결과 수 조정
+curl "http://localhost:8600/search?q=machine+learning&domain=arxiv.org&top_k=10"
+
+# 최소 유사도 설정 (0.0~1.0, 기본 0.3)
+curl "http://localhost:8600/search?q=vector+database&min_similarity=0.5"
+
+# 임베딩 통계
+curl "http://localhost:8600/stats"
+
+# 특정 URL의 원문 청크 조회
+curl "http://localhost:8600/chunk?url=https://example.com/article"
+
+# 헬스 체크
+curl "http://localhost:8600/health"
+```
+
+### Search 응답 예시
+
+```json
+{
+  "query": "크롤러 성능 최적화",
+  "top_k": 5,
+  "total": 3,
+  "elapsed_ms": 42.7,
+  "results": [
+    {
+      "url": "https://example.com/crawling-tips",
+      "title": "웹 크롤러 최적화 가이드",
+      "domain": "example.com",
+      "chunk_text": "비동기 HTTP 클라이언트를 활용하면...",
+      "heading_ctx": "## 동시 요청 최적화",
+      "chunk_index": 2,
+      "similarity": 0.8412,
+      "language": "ko",
+      "crawled_at": "2025-01-15 10:23:41"
+    }
+  ]
+}
 ```
 
 ---
