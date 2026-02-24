@@ -18,6 +18,10 @@
 #
 # =============================================================================
 
+# .env 파일이 있으면 자동으로 로드
+-include .env
+export
+
 # ── 설정 변수 (필요시 override 가능) ──────────────────────────────────────
 CRAWL_LIMIT    ?= 100
 WORKERS        ?= 1
@@ -40,6 +44,7 @@ test-crawl:
 			source "$(VENV_PATH)/bin/activate"; \
 		fi; \
 		cd "$(MAKEFILE_DIR)"; \
+		if [ -f ".env" ]; then set -a; source ".env"; set +a; fi; \
 		$(PYTHON) runners/sharded_master.py --count $(CRAWL_LIMIT) --auto-start & \
 		MASTER_PID=$$!; \
 		trap "kill $$MASTER_PID 2>/dev/null || true; exit" INT TERM EXIT; \
@@ -60,6 +65,7 @@ test-crawl-full:
 			source "$(VENV_PATH)/bin/activate"; \
 		fi; \
 		cd "$(MAKEFILE_DIR)"; \
+		if [ -f ".env" ]; then set -a; source ".env"; set +a; fi; \
 		$(PYTHON) runners/sharded_master.py --count 1000000 --auto-start & \
 		MASTER_PID=$$!; \
 		trap "kill $$MASTER_PID 2>/dev/null || true; exit" INT TERM EXIT; \

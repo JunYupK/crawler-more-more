@@ -12,10 +12,11 @@ import subprocess
 import time
 from datetime import datetime
 from typing import Optional
-from src.monitoring.metrics import MetricsManager
+
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from src.monitoring.metrics import MetricsManager
 from src.managers.tranco_manager import TrancoManager
 from src.managers.sharded_queue_manager import ShardedRedisQueueManager
 from src.managers.progress_tracker import ProgressTracker
