@@ -114,16 +114,22 @@ docker compose -f docker/docker-compose.stream.yml up -d
 ./desktop/start.sh stop                # 전체 중지
 ```
 
-**Mac — 인제스터:**
+**Mac — Sharded Crawler (Makefile):**
 ```bash
-# Desktop Kafka IP 지정 실행
-./mac/start.sh --kafka-servers <Desktop-IP>:9092
+# 1. 가상환경 생성 및 의존성 설치 (Python 3.13 권장)
+python3.13 -m venv ~/venv
+~/venv/bin/pip install -e ".[mac]"
+~/venv/bin/pip install psutil prometheus-client redis   # mac extras 누락 패키지
 
-# 테스트 모드 (100개)
-./mac/start.sh --test
+# 2. Desktop Kafka 주소 설정 (.env)
+echo "KAFKA_SERVERS=<Desktop-IP>:9092" > .env
+echo "KAFKA_BOOTSTRAP_SERVERS=<Desktop-IP>:9092" >> .env
 
-# URL 수 지정
-./mac/start.sh --limit 50000 --kafka-servers <Desktop-IP>:9092
+# 3. 크롤링 실행
+make test-crawl                          # 100개 URL, 워커 1개
+make test-crawl CRAWL_LIMIT=500          # URL 수 지정
+make test-crawl WORKERS=2               # 워커 수 지정
+make test-crawl-full                     # 전체 1M URL, 워커 4개
 ```
 
 **개별 실행이 필요한 경우** (`runners/` 전체 옵션 사용):

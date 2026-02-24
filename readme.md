@@ -171,23 +171,28 @@ pip install -e ".[desktop]"
 ./desktop/start.sh stop                # 전체 중지
 ```
 
-### 3. Mac — 인제스터 실행
+### 3. Mac — 크롤러 실행
 
 ```bash
-pip install -e ".[mac]"
+cd crawler-challenge
 
-# Desktop Kafka IP를 지정해서 실행
-./mac/start.sh --kafka-servers <Desktop-IP>:9092
+# 1. 가상환경 생성 및 의존성 설치 (Python 3.13 권장)
+python3.13 -m venv ~/venv
+~/venv/bin/pip install -e ".[mac]"
+~/venv/bin/pip install psutil prometheus-client redis   # mac extras 누락 패키지
 
-# 테스트 모드 (100개)
-./mac/start.sh --test
-```
+# 2. Desktop Kafka 주소 설정
+echo "KAFKA_SERVERS=<Desktop-IP>:9092" > .env
+echo "KAFKA_BOOTSTRAP_SERVERS=<Desktop-IP>:9092" >> .env
 
-### 4. (선택) Docker Sharded Crawler 실행
+# 3. 테스트 크롤링 (100개 URL, 워커 1개)
+make test-crawl
 
-```bash
-# Master + Worker 8개 시작
-python runners/sharded_master.py --count 1000000 --workers 8
+# URL 수 / 워커 수 조절
+make test-crawl CRAWL_LIMIT=500 WORKERS=2
+
+# 전체 1M URL 크롤링
+make test-crawl-full
 ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -459,6 +464,10 @@ crawler-challenge/
 | **pgvector 저장 실패** | asyncpg 타입 불일치 | `[f1,f2,...]` 명시적 포맷 변환 |
 | **asyncio 경고** | `get_event_loop()` deprecated | `get_running_loop()` 교체 |
 | **stats race condition** | executor 스레드에서 직접 수정 | 결과 코드 반환 후 async에서 업데이트 |
+| **`ModuleNotFoundError: No module named 'src'`** | `sharded_master.py`에서 `sys.path.append`가 `src.*` import 이후에 위치 | `sys.path.append`를 모든 `src` import 위로 이동 |
+| **`make test-crawl` 패키지 오류** | `psutil`, `prometheus-client`, `redis`가 `mac` extras에 누락 | `pip install psutil prometheus-client redis` 별도 설치 |
+| **`make test-crawl` Kafka 연결 실패** | `KAFKA_SERVERS` 미설정으로 `localhost:9092` 시도 | `crawler-challenge/.env`에 `KAFKA_SERVERS=<Desktop-IP>:9092` 설정 |
+| **`aiokafka: Unable to connect to node with id 1`** | 브로커 내부 메타데이터 갱신 시도 실패 (노이즈) | 무시해도 됨 — 실제 데이터 전송에는 영향 없음 |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
